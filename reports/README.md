@@ -1,0 +1,1 @@
+This directory will contain generated reports (figures, analysis summaries and other artefacts) produced by notebooks and scripts.  It is intentionally left empty in version control to keep the repository lightweight.  Generated files can be committed to share results or omitted to keep history clean.
