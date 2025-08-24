@@ -25,7 +25,7 @@ import pandas as pd
 
 from src.utils.api_clients import (
     fetch_openweathermap_air_pollution,
-    fetch_openaq_v3_measurements,
+    fetch_openaq_measurements,
     fetch_purpleair_sensors,
     fetch_waqi_current,
     fetch_visualcrossing_weather,
@@ -99,7 +99,7 @@ def main(argv: Optional[list[str]] = None) -> None:
 
     # Fetch OpenAQ measurements
     try:
-        openaq_df = fetch_openaq_v3_measurements(
+        openaq_df = fetch_openaq_measurements(
             city=city, coordinates=(lat, lon), start_date=start_date, end_date=end_date
         )
         fname = f"{city or 'coord'}_openaq_{start_date}_{end_date}.csv"

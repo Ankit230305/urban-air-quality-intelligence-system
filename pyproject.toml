@@ -12,6 +12,9 @@ license = { text = "MIT" }
 authors = [{ name = "Ankit Reddy", email = "ankitreddy@example.com" }]
 
 dependencies = [
+    "statsmodels",
+    "mlxtend",
+    "overpy",
   "python-dotenv>=1.0.0",
   "pandas>=2.2",
   "numpy>=1.26",
