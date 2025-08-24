@@ -136,10 +136,23 @@ def merge_and_feature_engineer(
         pollutant_resampled = p_df[pollutant_columns].resample(temporal_resolution).mean()
 
     # Resample weather data
-    weather_resampled = w_df.resample(temporal_resolution).mean()
+    weather_cols = [c for c in ['temp','humidity','wind_speed','precip'] if c in w_df.columns]
+    weather_resampled = w_df[weather_cols].resample(temporal_resolution).mean()
 
     # Merge on datetime
-    merged = pollutant_resampled.join(weather_resampled, how="outer")
+    lat = None; lon = None
+    for _df in (p_df, w_df):
+        lat = (float(_df['latitude'].dropna().median()) if lat is None and 'latitude' in _df.columns and _df['latitude'].notna().any() else lat)
+        lon = (float(_df['longitude'].dropna().median()) if lon is None and 'longitude' in _df.columns and _df['longitude'].notna().any() else lon)
+    lat = None; lon = None
+    for _df in (p_df, w_df):
+        lat = (float(_df['latitude'].dropna().median()) if lat is None and 'latitude' in _df.columns and _df['latitude'].notna().any() else lat)
+        lon = (float(_df['longitude'].dropna().median()) if lon is None and 'longitude' in _df.columns and _df['longitude'].notna().any() else lon)
+    merged = pollutant_resampled.join(weather_resampled, how='outer')
+    if lat is not None: merged['latitude'] = lat
+    if lon is not None: merged['longitude'] = lon
+    if lat is not None: merged['latitude'] = lat
+    if lon is not None: merged['longitude'] = lon
     merged = merged.reset_index().rename(columns={"index": "datetime"})
 
     # Compute AQI from PM2.5 if available
