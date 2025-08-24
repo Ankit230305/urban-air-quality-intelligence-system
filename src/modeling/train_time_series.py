@@ -1,82 +1,56 @@
 import argparse
 from pathlib import Path
-
 import pandas as pd
 from prophet import Prophet
 
+def make_naive(series: pd.Series) -> pd.Series:
+    s = pd.to_datetime(series, errors="coerce")
+    # Try drop tz if present; otherwise localize as naive
+    try:
+        s = s.dt.tz_convert(None)
+    except Exception:
+        try:
+            s = s.dt.tz_localize(None)
+        except Exception:
+            pass
+    return s
 
 def main():
-    parser = argparse.ArgumentParser(description="Train Prophet 7-day forecast for PM2.5")
-    parser.add_argument("--input-file", required=True, help="Path to processed features CSV")
-    parser.add_argument("--output-dir", required=True, help="Directory to write model/forecast")
-    parser.add_argument("--target", default="pm2_5", help="Target column (default: pm2_5)")
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--input-file", required=True)
+    ap.add_argument("--output-dir", required=True)
+    ap.add_argument("--city", default="")
+    ap.add_argument("--target", default="pm2_5", help="column to forecast (default: pm2_5)")
+    ap.add_argument("--periods", type=int, default=168, help="future periods (default: 168 hours = 7 days)")
+    ap.add_argument("--freq", default="H", help="future frequency (default: H for hourly)")
+    args = ap.parse_args()
 
-    in_path = Path(args.input_file)
-    out_dir = Path(args.output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    target_col = args.target
+    outdir = Path(args.output_dir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    slug = args.city.lower().replace(" ", "_") if args.city else ""
 
-    # Load data
-    df = pd.read_csv(in_path)
+    df = pd.read_csv(args.input_file, parse_dates=["datetime"]).sort_values("datetime")
+    if args.target not in df.columns:
+        raise SystemExit(f"Target column '{args.target}' not found in {args.input_file}")
 
-    # Ensure datetime exists and strip any timezone, then aggregate to daily means
-    if "datetime" not in df.columns:
-        raise SystemExit("Input file must contain a 'datetime' column")
+    ts = df[["datetime", args.target]].rename(columns={"datetime": "ds", args.target: "y"}).copy()
+    ts["ds"] = make_naive(ts["ds"])
+    ts["y"] = pd.to_numeric(ts["y"], errors="coerce")
+    ts = ts.dropna(subset=["ds", "y"])
 
-    ts = pd.to_datetime(df["datetime"], errors="coerce")
-    # robust timezone stripping
-    try:
-        ts = ts.dt.tz_convert(None)
-    except Exception:
-        pass
-    try:
-        ts = ts.dt.tz_localize(None)
-    except Exception:
-        pass
+    if ts.empty or len(ts) < 20:
+        raise SystemExit("Not enough data to train Prophet (need at least ~20 rows).")
 
-    if target_col not in df.columns:
-        # fallback if the column was named pm25
-        if "pm25" in df.columns:
-            target_col = "pm25"
-        else:
-            raise SystemExit(f"Target column '{args.target}' not found in {in_path.name}")
-
-    work = pd.DataFrame({"datetime": ts, target_col: pd.to_numeric(df[target_col], errors="coerce")})
-    work = work.dropna(subset=[target_col]).set_index("datetime").sort_index()
-
-    # Resample to daily mean to avoid gaps/irregular hourly cadence
-    daily = work.resample("D").mean(numeric_only=True).dropna().reset_index()
-
-    if len(daily) < 7:
-        raise SystemExit(f"Not enough history after resampling (got {len(daily)} daily points)")
-
-    ts_df = daily.rename(columns={"datetime": "ds", target_col: "y"})
-
-    # Fit Prophet
+    # Prophet model
     m = Prophet(daily_seasonality=True, weekly_seasonality=True, yearly_seasonality=False)
-    m.fit(ts_df)
+    m.fit(ts)
 
-    # 7-day ahead daily forecast
-    future = m.make_future_dataframe(periods=7, freq="D")
-    forecast = m.predict(future)
+    future = m.make_future_dataframe(periods=args.periods, freq=args.freq, include_history=True)
+    fcst = m.predict(future)[["ds", "yhat", "yhat_lower", "yhat_upper"]]
 
-    # Save outputs
-    forecast_out = out_dir / "forecast_pm25.csv"
-    model_out = out_dir / "prophet_pm25_model.pkl"
-
-    forecast.to_csv(forecast_out, index=False)
-    try:
-        # Prophet models are picklable
-        import joblib
-        joblib.dump(m, model_out)
-    except Exception:
-        # If joblib fails due to environment differences, at least keep forecast CSV
-        pass
-
-    print(f"✅ Saved forecast to {forecast_out} (rows={len(forecast)})")
-    print(f"📦 Model saved to {model_out} (if joblib succeeded)")
-
+    out_file = outdir / (f"forecast_pm25_{slug}.csv" if slug else "forecast_pm25.csv")
+    fcst.to_csv(out_file, index=False)
+    print(f"✅ Saved forecast to {out_file} (rows={len(fcst)})")
 
 if __name__ == "__main__":
     main()
