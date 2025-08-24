@@ -1,90 +1,79 @@
-"""Estimate respiratory health risks based on pollutant exposure.
-
-This script computes a simple risk score for respiratory illness based on
-pollutant concentrations and returns a categorical risk level (Low,
-Moderate, High).  The model implemented here is not medically
-validated; it serves as a placeholder until domain‑specific models can
-be integrated.  The intent is to demonstrate how health impact scores
-could be layered on top of pollution data.
-"""
-
-from __future__ import annotations
-
 import argparse
-import os
-import sys
-from typing import Tuple
-
-import numpy as np
+from pathlib import Path
 import pandas as pd
+import numpy as np
 
+POLLUTANTS = ["pm2_5","pm10","no2","o3","so2","co"]
 
-def parse_args(args):
-    parser = argparse.ArgumentParser(
-        description="Compute respiratory health risk scores from pollution data."
-    )
-    parser.add_argument(
-        "--input-file",
-        type=str,
-        required=True,
-        help="CSV file with pollutant concentration columns (pm2_5/pm25, pm10, no2, o3, co, so2)",
-    )
-    parser.add_argument(
-        "--output-file",
-        type=str,
-        required=True,
-        help="Path to save the health risk CSV",
-    )
-    return parser.parse_args(args)
+def parse_args():
+    ap = argparse.ArgumentParser(description="Simple health risk scoring & advisories")
+    ap.add_argument("--input-file", required=True, help="features CSV with datetime & pollutants")
+    ap.add_argument("--demographics", required=False, default="data/external/demographics_india.csv")
+    ap.add_argument("--city", required=False, default=None)
+    ap.add_argument("--output", required=True, help="where to write health CSV")
+    return ap.parse_args()
 
+def aqi_category_from_pm25(pm25):
+    # US EPA style
+    if pd.isna(pm25): return "Unknown"
+    x = float(pm25)
+    if x <= 12: return "Good"
+    if x <= 35.4: return "Moderate"
+    if x <= 55.4: return "Unhealthy (SG)"
+    if x <= 150.4: return "Unhealthy"
+    if x <= 250.4: return "Very Unhealthy"
+    return "Hazardous"
 
-def compute_risk_score(row: pd.Series) -> Tuple[float, str]:
-    """Compute a risk score and category from pollutant concentrations.
+def risk_from_pm25(pm25, elderly=8.0):
+    # heuristic risk 0..1; bump with elderly share
+    if pd.isna(pm25): return 0.3
+    x = max(0.0, min(500.0, float(pm25)))
+    base = x / 150.0  # saturate ~ Unhealthy
+    return float(min(1.0, base * (1.0 + elderly/100.0)))
 
-    A simple logistic function is used to transform the linear combination
-    of pollutants into a probability between 0 and 1.  Categories are
-    derived from the score.
-    """
-    # Extract concentrations (fallback to 0 if missing)
-    pm25 = row.get("pm2_5", row.get("pm25", 0.0)) or 0.0
-    pm10 = row.get("pm10", 0.0) or 0.0
-    no2 = row.get("no2", 0.0) or 0.0
-    o3 = row.get("o3", 0.0) or 0.0
-    co = row.get("co", 0.0) or 0.0
-    so2 = row.get("so2", 0.0) or 0.0
-    # Linear model coefficients (arbitrary but increasing with concentration)
-    z = 0.03 * pm25 + 0.02 * pm10 + 0.015 * no2 + 0.01 * o3 + 0.005 * co + 0.01 * so2 - 5
-    score = 1 / (1 + np.exp(-z))  # sigmoid transformation
-    # Categorise risk
-    if score < 0.33:
-        category = "Low"
-    elif score < 0.66:
-        category = "Moderate"
-    else:
-        category = "High"
-    return score, category
+def main():
+    args = parse_args()
+    df = pd.read_csv(args.input_file, parse_dates=["datetime"])
+    try:
+        df["datetime"] = df["datetime"].dt.tz_convert(None)
+    except Exception:
+        try:
+            df["datetime"] = df["datetime"].dt.tz_localize(None)
+        except Exception:
+            pass
 
+    # coerce numerics
+    for c in POLLUTANTS + ["temp","humidity","wind_speed","precip","aqi","population","pop_density_per_km2","pct_elderly","pct_children","respiratory_illness_rate_per_100k","latitude","longitude"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
 
-def main(argv=None):
-    args = parse_args(argv or sys.argv[1:])
-    input_file = args.input_file
-    output_file = args.output_file
+    # ensure aqi_category exists
+    if "aqi_category" not in df.columns:
+        df["aqi_category"] = df["pm2_5"].apply(aqi_category_from_pm25) if "pm2_5" in df.columns else "Unknown"
 
-    df = pd.read_csv(input_file)
-    # Compute risk for each row
-    scores = []
-    categories = []
-    for _, row in df.iterrows():
-        score, cat = compute_risk_score(row)
-        scores.append(score)
-        categories.append(cat)
-    df["health_risk_score"] = scores
-    df["health_risk_category"] = categories
-    # Save to file
-    os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
-    df.to_csv(output_file, index=False)
-    print(f"Saved health risk data to {output_file}")
+    # demographics join (optional)
+    if args.city and Path(args.demographics).exists():
+        d = pd.read_csv(args.demographics)
+        # simple single-row city match
+        row = d.loc[d["city"].str.lower() == args.city.lower()].head(1)
+        if not row.empty:
+            for c in ["population","pop_density_per_km2","pct_elderly","pct_children","respiratory_illness_rate_per_100k"]:
+                if c in d.columns:
+                    df[c] = df[c].fillna(row.iloc[0].get(c))
 
+    elderly = df["pct_elderly"].fillna(8.0).iloc[0] if "pct_elderly" in df.columns and not df.empty else 8.0
+    df["health_risk_score"] = df.get("pm2_5", pd.Series(index=df.index, dtype=float)).apply(lambda x: risk_from_pm25(x, elderly))
+    def band(x):
+        if pd.isna(x): return "Unknown"
+        if x < 0.25: return "Low"
+        if x < 0.5: return "Moderate"
+        if x < 0.75: return "High"
+        return "Very High"
+    df["health_risk_band"] = df["health_risk_score"].apply(band)
+
+    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(args.output, index=False)
+    print(f"✅ health file saved: {args.output} (rows={len(df)})")
 
 if __name__ == "__main__":
     main()

@@ -1,86 +1,81 @@
-"""Train a Prophet model for time series forecasting of air pollution.
-
-Prophet (formerly fbprophet) is used here to forecast PM2.5 concentrations
-seven days ahead.  The input file must contain a `datetime` column and a
-target column (either `pm2_5` or `pm25`).  The script outputs the
-forecasted values to a CSV file in the provided output directory and
-saves the fitted model for reuse.
-"""
-
-from __future__ import annotations
-
 import argparse
-import os
-import sys
+from pathlib import Path
 
-import joblib
 import pandas as pd
 from prophet import Prophet
 
 
-def parse_args(args):
-    parser = argparse.ArgumentParser(
-        description="Train a Prophet model for PM2.5 time series forecasting."
-    )
-    parser.add_argument(
-        "--input-file",
-        type=str,
-        required=True,
-        help="Path to the processed CSV containing datetime and PM2.5 columns.",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=str,
-        required=True,
-        help="Directory where the forecast and model will be saved.",
-    )
-    parser.add_argument(
-        "--forecast-horizon",
-        type=int,
-        default=7,
-        help="Number of days to forecast into the future (default: 7)",
-    )
-    return parser.parse_args(args)
+def main():
+    parser = argparse.ArgumentParser(description="Train Prophet 7-day forecast for PM2.5")
+    parser.add_argument("--input-file", required=True, help="Path to processed features CSV")
+    parser.add_argument("--output-dir", required=True, help="Directory to write model/forecast")
+    parser.add_argument("--target", default="pm2_5", help="Target column (default: pm2_5)")
+    args = parser.parse_args()
 
+    in_path = Path(args.input_file)
+    out_dir = Path(args.output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    target_col = args.target
 
-def main(argv=None):
-    args = parse_args(argv or sys.argv[1:])
-    input_file = args.input_file
-    output_dir = args.output_dir
-    horizon_days = args.forecast_horizon
+    # Load data
+    df = pd.read_csv(in_path)
 
-    os.makedirs(output_dir, exist_ok=True)
-    df = pd.read_csv(input_file)
-    # Determine PM2.5 column
-    if "pm2_5" in df.columns:
-        target_col = "pm2_5"
-    elif "pm25" in df.columns:
-        target_col = "pm25"
-    else:
-        raise ValueError("Input file must contain a 'pm2_5' or 'pm25' column")
+    # Ensure datetime exists and strip any timezone, then aggregate to daily means
+    if "datetime" not in df.columns:
+        raise SystemExit("Input file must contain a 'datetime' column")
 
-    # Prepare data for Prophet: columns must be named 'ds' and 'y'
-    ts_df = df[["datetime", target_col]].dropna()
-    ts_df = ts_df.rename(columns={"datetime": "ds", target_col: "y"})
-    ts_df["ds"] = pd.to_datetime(ts_df["ds"], errors="coerce")
-    ts_df = ts_df.sort_values("ds")
+    ts = pd.to_datetime(df["datetime"], errors="coerce")
+    # robust timezone stripping
+    try:
+        ts = ts.dt.tz_convert(None)
+    except Exception:
+        pass
+    try:
+        ts = ts.dt.tz_localize(None)
+    except Exception:
+        pass
 
-    model = Prophet()
-    model.fit(ts_df)
+    if target_col not in df.columns:
+        # fallback if the column was named pm25
+        if "pm25" in df.columns:
+            target_col = "pm25"
+        else:
+            raise SystemExit(f"Target column '{args.target}' not found in {in_path.name}")
 
-    # Create future dataframe for forecasting
-    future = model.make_future_dataframe(periods=horizon_days, freq="D")
-    forecast = model.predict(future)
+    work = pd.DataFrame({"datetime": ts, target_col: pd.to_numeric(df[target_col], errors="coerce")})
+    work = work.dropna(subset=[target_col]).set_index("datetime").sort_index()
 
-    # Save forecast to CSV
-    forecast_out = os.path.join(output_dir, "pm25_forecast.csv")
+    # Resample to daily mean to avoid gaps/irregular hourly cadence
+    daily = work.resample("D").mean(numeric_only=True).dropna().reset_index()
+
+    if len(daily) < 7:
+        raise SystemExit(f"Not enough history after resampling (got {len(daily)} daily points)")
+
+    ts_df = daily.rename(columns={"datetime": "ds", target_col: "y"})
+
+    # Fit Prophet
+    m = Prophet(daily_seasonality=True, weekly_seasonality=True, yearly_seasonality=False)
+    m.fit(ts_df)
+
+    # 7-day ahead daily forecast
+    future = m.make_future_dataframe(periods=7, freq="D")
+    forecast = m.predict(future)
+
+    # Save outputs
+    forecast_out = out_dir / "forecast_pm25.csv"
+    model_out = out_dir / "prophet_pm25_model.pkl"
+
     forecast.to_csv(forecast_out, index=False)
-    print(f"Saved forecast to {forecast_out}")
+    try:
+        # Prophet models are picklable
+        import joblib
+        joblib.dump(m, model_out)
+    except Exception:
+        # If joblib fails due to environment differences, at least keep forecast CSV
+        pass
 
-    # Save model
-    model_path = os.path.join(output_dir, "pm25_prophet_model.joblib")
-    joblib.dump(model, model_path)
-    print(f"Saved Prophet model to {model_path}")
+    print(f"✅ Saved forecast to {forecast_out} (rows={len(forecast)})")
+    print(f"📦 Model saved to {model_out} (if joblib succeeded)")
 
 
 if __name__ == "__main__":

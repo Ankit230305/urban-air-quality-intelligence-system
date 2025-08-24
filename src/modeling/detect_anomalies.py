@@ -1,84 +1,66 @@
-"""Detect anomalies in air quality time series.
-
-This script identifies abnormal pollution events (spikes) using a
-z‑score method.  It reads a processed data file containing PM2.5
-concentrations and flags observations that deviate significantly from
-the rolling mean.  The results are written to a new CSV with an
-`is_anomaly` boolean column.
-"""
-
-from __future__ import annotations
-
 import argparse
-import os
-import sys
-
-import numpy as np
+from pathlib import Path
 import pandas as pd
+import numpy as np
 
+POLLUTANTS = ["pm2_5","pm10","no2","o3","so2","co"]
 
-def parse_args(args):
-    parser = argparse.ArgumentParser(
-        description="Detect anomalies in PM2.5 time series using z-score."
-    )
-    parser.add_argument(
-        "--input-file",
-        type=str,
-        required=True,
-        help="CSV file with datetime and PM2.5 data.",
-    )
-    parser.add_argument(
-        "--output-file",
-        type=str,
-        required=True,
-        help="Output CSV with anomaly flags.",
-    )
-    parser.add_argument(
-        "--window",
-        type=int,
-        default=24,
-        help="Rolling window size (in samples) for computing the mean and std.",
-    )
-    parser.add_argument(
-        "--threshold",
-        type=float,
-        default=3.0,
-        help="Z-score threshold beyond which a point is considered an anomaly.",
-    )
-    return parser.parse_args(args)
+def parse_args():
+    ap = argparse.ArgumentParser(description="Detect pollution spikes via rolling z-score")
+    ap.add_argument("--input-file", required=True, help="Processed features CSV with 'datetime'")
+    ap.add_argument("--output", required=True, help="Where to write anomalies CSV")
+    ap.add_argument("--target", default="pm2_5", help="Column to detect anomalies on (default: pm2_5)")
+    ap.add_argument("--window", type=int, default=24, help="Rolling window length (hours)")
+    ap.add_argument("--z-thresh", type=float, default=3.0, help="Z-score threshold for anomaly")
+    return ap.parse_args()
 
+def main():
+    args = parse_args()
+    df = pd.read_csv(args.input_file, parse_dates=["datetime"])
+    # normalize tz
+    try:
+        df["datetime"] = df["datetime"].dt.tz_convert(None)
+    except Exception:
+        try:
+            df["datetime"] = df["datetime"].dt.tz_localize(None)
+        except Exception:
+            pass
 
-def main(argv=None):
-    args = parse_args(argv or sys.argv[1:])
-    input_file = args.input_file
-    output_file = args.output_file
-    window = args.window
-    thresh = args.threshold
+    # coerce numerics
+    for c in POLLUTANTS + ["temp","humidity","wind_speed","precip","aqi","latitude","longitude"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    df = pd.read_csv(input_file)
-    if "pm2_5" in df.columns:
-        col = "pm2_5"
-    elif "pm25" in df.columns:
-        col = "pm25"
-    else:
-        raise ValueError("Input must contain a 'pm2_5' or 'pm25' column")
+    df = df.sort_values("datetime").copy()
+    # drop rows where all pollutants are missing
+    if set(POLLUTANTS).intersection(df.columns):
+        df = df.dropna(subset=list(set(POLLUTANTS).intersection(df.columns)), how="all")
 
-    # Ensure dataframe is sorted by datetime
-    df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce")
-    df = df.sort_values("datetime").reset_index(drop=True)
+    target = args.target
+    if target not in df.columns:
+        # nothing to do, write empty with header
+        pd.DataFrame(columns=["datetime", target, "z_score", "is_anomaly"]).to_csv(args.output, index=False)
+        print(f"⚠️ {target} not in columns; wrote empty anomalies file {args.output}")
+        return
 
-    # Compute rolling mean and std
-    rolling_mean = df[col].rolling(window=window, min_periods=1, center=True).mean()
-    rolling_std = df[col].rolling(window=window, min_periods=1, center=True).std()
-    z_scores = (df[col] - rolling_mean) / rolling_std
-    df["z_score"] = z_scores
-    df["is_anomaly"] = z_scores.abs() > thresh
+    # rolling mean/std (centered)
+    window = max(3, int(args.window))
+    roll_mean = df[target].rolling(window=window, min_periods=1, center=True).mean()
+    roll_std  = df[target].rolling(window=window, min_periods=1, center=True).std(ddof=0).replace(0, np.nan)
 
-    # Save results
-    os.makedirs(os.path.dirname(output_file) or ".", exist_ok=True)
-    df.to_csv(output_file, index=False)
-    print(f"Saved anomalies to {output_file} (found {df['is_anomaly'].sum()} anomalies)")
+    z = (df[target] - roll_mean) / roll_std
+    z = z.fillna(0.0)
+    is_anom = (z.abs() >= float(args.z_thresh))
 
+    out_cols = ["datetime", target, "temp", "humidity", "wind_speed", "precip", "latitude", "longitude"]
+    out_cols = [c for c in out_cols if c in df.columns]
+    out = df[out_cols].copy()
+    out["z_score"] = z.values
+    out["is_anomaly"] = is_anom.values
+
+    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+    out.to_csv(args.output, index=False)
+    print(f"✅ anomalies saved: {args.output} (rows={len(out)})")
 
 if __name__ == "__main__":
     main()
