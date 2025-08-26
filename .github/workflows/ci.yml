@@ -33,12 +33,12 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install .[dev]
 
-      - name: Lint with flake8
+      - name: Lint with flake8 tests
         run: |
-          flake8
+          flake8 tests
 
       - name: Run tests
         env:
           OPENWEATHERMAP_API_KEY: dummy
         run: |
-          pytest -q
+          PYTHONPATH=. pytest -q

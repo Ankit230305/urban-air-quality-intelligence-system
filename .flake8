@@ -1,11 +1,4 @@
 [flake8]
-max-line-length = 100
-extend-ignore = E203,W503
-exclude =
-    .git,
-    .venv,
-    venv,
-    build,
-    dist,
-    **/__pycache__,
-    **/*.ipynb
+max-line-length = 120
+extend-ignore = E203, W503
+exclude = .git, __pycache__, build, dist, data, reports, models, .venv, .mypy_cache
