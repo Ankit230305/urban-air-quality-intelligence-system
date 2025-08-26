@@ -41,4 +41,4 @@ jobs:
         env:
           OPENWEATHERMAP_API_KEY: dummy
         run: |
-          PYTHONPATH=. pytest -q
+          PYTHONPATH=. PYTHONPATH=. pytest -q
