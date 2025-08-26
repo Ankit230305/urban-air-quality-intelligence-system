@@ -30,8 +30,17 @@ def _coerce_datetime(df: pd.DataFrame) -> pd.DataFrame:
 def _coerce_numeric(df: pd.DataFrame) -> pd.DataFrame:
     """Force numeric for pollutants/weather & AQI, non-numeric -> NaN."""
     for c in [
-        "pm2_5", "pm10", "no2", "o3", "so2", "co",
-        "temp", "humidity", "wind_speed", "precip", "aqi"
+        "pm2_5",
+        "pm10",
+        "no2",
+        "o3",
+        "so2",
+        "co",
+        "temp",
+        "humidity",
+        "wind_speed",
+        "precip",
+        "aqi",
     ]:
         if c in df.columns:
             # try soft first
@@ -65,10 +74,21 @@ def run_clustering(daily: pd.DataFrame, clusters: int = 3) -> pd.DataFrame:
         return daily.assign(cluster=np.nan)
 
     feat_cols = [
-        c for c in [
-            "pm2_5", "pm10", "no2", "o3", "so2", "co",
-            "temp", "humidity", "wind_speed", "precip", "aqi"
-        ] if c in daily.columns
+        c
+        for c in [
+            "pm2_5",
+            "pm10",
+            "no2",
+            "o3",
+            "so2",
+            "co",
+            "temp",
+            "humidity",
+            "wind_speed",
+            "precip",
+            "aqi",
+        ]
+        if c in daily.columns
     ]
     if not feat_cols:
         return daily.assign(cluster=np.nan)
@@ -105,8 +125,22 @@ def mine_associations(daily: pd.DataFrame) -> pd.DataFrame:
     if daily.empty:
         return pd.DataFrame(columns=["antecedents", "consequents", "support", "confidence", "lift"])
 
-    cols = [c for c in ["pm2_5", "pm10", "no2", "o3", "so2", "co", "temp", "humidity", "wind_speed", "precip"]
-            if c in daily.columns]
+    cols = [
+        c
+        for c in [
+            "pm2_5",
+            "pm10",
+            "no2",
+            "o3",
+            "so2",
+            "co",
+            "temp",
+            "humidity",
+            "wind_speed",
+            "precip",
+        ]
+        if c in daily.columns
+    ]
     if not cols:
         return pd.DataFrame(columns=["antecedents", "consequents", "support", "confidence", "lift"])
 
@@ -124,7 +158,7 @@ def mine_associations(daily: pd.DataFrame) -> pd.DataFrame:
         for lev in pd.unique(q):
             if pd.isna(lev):
                 continue
-            items[f"{c}={lev}"] = (q == lev)
+            items[f"{c}={lev}"] = q == lev
 
     trans = pd.DataFrame(items).fillna(False)
     if trans.sum().sum() == 0:
@@ -146,11 +180,19 @@ def mine_associations(daily: pd.DataFrame) -> pd.DataFrame:
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Pattern discovery: daily seasonality, clustering, association rules")
-    ap.add_argument("--input-file", required=True, help="Processed features CSV with datetime + pollutants + weather")
+    ap = argparse.ArgumentParser(
+        description="Pattern discovery: daily seasonality, clustering, association rules"
+    )
+    ap.add_argument(
+        "--input-file",
+        required=True,
+        help="Processed features CSV with datetime + pollutants + weather",
+    )
     ap.add_argument("--outdir", default="reports", help="Directory to write outputs")
     ap.add_argument("--city", default="City", help="City name (for filenames)")
-    ap.add_argument("--clusters", type=int, default=3, help="KMeans cluster count (capped to valid rows)")
+    ap.add_argument(
+        "--clusters", type=int, default=3, help="KMeans cluster count (capped to valid rows)"
+    )
     args = ap.parse_args()
 
     outdir = Path(args.outdir)
@@ -175,7 +217,9 @@ def main():
         f.write(f"# Pattern discovery — {args.city}\n\n")
         f.write(f"- Daily rows: **{len(daily)}**\n")
         if "cluster" in daily.columns and daily["cluster"].notna().any():
-            f.write(f"- Clusters present: **{int(pd.Series(daily['cluster'].dropna()).nunique())}**\n")
+            f.write(
+                f"- Clusters present: **{int(pd.Series(daily['cluster'].dropna()).nunique())}**\n"
+            )
         else:
             f.write("- Clusters present: *(not enough complete rows to compute)*\n")
         f.write(f"- Association rules: **{len(rules)}**\n")

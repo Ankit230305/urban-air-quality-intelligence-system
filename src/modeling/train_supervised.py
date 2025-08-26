@@ -12,8 +12,12 @@ from sklearn.ensemble import (
 )
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
-    mean_absolute_error, mean_squared_error, r2_score,
-    accuracy_score, f1_score, confusion_matrix
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score,
+    accuracy_score,
+    f1_score,
+    confusion_matrix,
 )
 import joblib
 import warnings
@@ -144,7 +148,7 @@ def main():
     y = y.loc[ok]
 
     X_raw = numeric_only(reg_df, feats)
-    feats = list(X_raw.columns)               # lock names after numeric filter
+    feats = list(X_raw.columns)  # lock names after numeric filter
     X_imp = fill_and_prune(X_raw)
 
     # align y to X_imp
@@ -165,10 +169,15 @@ def main():
             "R2": float(r2_score(y_test, ypr)),
         }
         preds_store["rf"] = (y_test, ypr)
-        pd.DataFrame({"feature": list(X_train.columns), "importance": rf.feature_importances_}) \
-            .sort_values("importance", ascending=False) \
-            .to_csv(outdir / f"feature_importance_rf_{city_slug}.csv", index=False)
-        joblib.dump({"model": rf, "features": list(X_train.columns)}, outdir / f"rf_regressor_{city_slug}.pkl")
+        pd.DataFrame(
+            {"feature": list(X_train.columns), "importance": rf.feature_importances_}
+        ).sort_values("importance", ascending=False).to_csv(
+            outdir / f"feature_importance_rf_{city_slug}.csv", index=False
+        )
+        joblib.dump(
+            {"model": rf, "features": list(X_train.columns)},
+            outdir / f"rf_regressor_{city_slug}.pkl",
+        )
 
         # B) GradientBoostingRegressor (fallback to HistGBR if NaNs raise)
         try:
@@ -182,10 +191,15 @@ def main():
             }
             preds_store["gbr"] = (y_test, ypg)
             # feature_importances_ exists for GBR
-            pd.DataFrame({"feature": list(X_train.columns), "importance": gbr.feature_importances_}) \
-                .sort_values("importance", ascending=False) \
-                .to_csv(outdir / f"feature_importance_gbr_{city_slug}.csv", index=False)
-            joblib.dump({"model": gbr, "features": list(X_train.columns)}, outdir / f"gbr_regressor_{city_slug}.pkl")
+            pd.DataFrame(
+                {"feature": list(X_train.columns), "importance": gbr.feature_importances_}
+            ).sort_values("importance", ascending=False).to_csv(
+                outdir / f"feature_importance_gbr_{city_slug}.csv", index=False
+            )
+            joblib.dump(
+                {"model": gbr, "features": list(X_train.columns)},
+                outdir / f"gbr_regressor_{city_slug}.pkl",
+            )
         except ValueError:
             # NaN-tolerant alternative
             hgb = HistGradientBoostingRegressor(random_state=42)
@@ -198,7 +212,10 @@ def main():
             }
             preds_store["gbr"] = (y_test, yph)  # keep key 'gbr' for selection below
             # HGBR has no feature_importances_
-            joblib.dump({"model": hgb, "features": list(X_train.columns)}, outdir / f"hgb_regressor_{city_slug}.pkl")
+            joblib.dump(
+                {"model": hgb, "features": list(X_train.columns)},
+                outdir / f"hgb_regressor_{city_slug}.pkl",
+            )
 
         # Write predictions for the better of the two
         best_key = min(reg_results, key=lambda k: reg_results[k]["RMSE"])
@@ -231,11 +248,18 @@ def main():
                 "accuracy": float(accuracy_score(yte, yhat)),
                 "f1_macro": float(f1_score(yte, yhat, average="macro")),
             }
-            joblib.dump({"model": lr, "features": list(Xtr.columns)}, outdir / f"lr_classifier_{city_slug}.pkl")
-            cm = confusion_matrix(yte, yhat, labels=["Good", "Moderate", "Unhealthy", "Very Unhealthy", "Hazardous"])
-            pd.DataFrame(cm, index=["Good", "Moderate", "Unhealthy", "Very Unhealthy", "Hazardous"],
-                         columns=["Good", "Moderate", "Unhealthy", "Very Unhealthy", "Hazardous"]) \
-                .to_csv(outdir / f"confusion_matrix_{city_slug}.csv")
+            joblib.dump(
+                {"model": lr, "features": list(Xtr.columns)},
+                outdir / f"lr_classifier_{city_slug}.pkl",
+            )
+            cm = confusion_matrix(
+                yte, yhat, labels=["Good", "Moderate", "Unhealthy", "Very Unhealthy", "Hazardous"]
+            )
+            pd.DataFrame(
+                cm,
+                index=["Good", "Moderate", "Unhealthy", "Very Unhealthy", "Hazardous"],
+                columns=["Good", "Moderate", "Unhealthy", "Very Unhealthy", "Hazardous"],
+            ).to_csv(outdir / f"confusion_matrix_{city_slug}.csv")
 
             # RandomForestClassifier
             rfc = RandomForestClassifier(n_estimators=300, random_state=42, n_jobs=-1)
@@ -245,11 +269,18 @@ def main():
                 "accuracy": float(accuracy_score(yte, yhat)),
                 "f1_macro": float(f1_score(yte, yhat, average="macro")),
             }
-            joblib.dump({"model": rfc, "features": list(Xtr.columns)}, outdir / f"rfc_classifier_{city_slug}.pkl")
-            cm = confusion_matrix(yte, yhat, labels=["Good", "Moderate", "Unhealthy", "Very Unhealthy", "Hazardous"])
-            pd.DataFrame(cm, index=["Good", "Moderate", "Unhealthy", "Very Unhealthy", "Hazardous"],
-                         columns=["Good", "Moderate", "Unhealthy", "Very Unhealthy", "Hazardous"]) \
-                .to_csv(outdir / f"confusion_matrix_{city_slug}.csv")
+            joblib.dump(
+                {"model": rfc, "features": list(Xtr.columns)},
+                outdir / f"rfc_classifier_{city_slug}.pkl",
+            )
+            cm = confusion_matrix(
+                yte, yhat, labels=["Good", "Moderate", "Unhealthy", "Very Unhealthy", "Hazardous"]
+            )
+            pd.DataFrame(
+                cm,
+                index=["Good", "Moderate", "Unhealthy", "Very Unhealthy", "Hazardous"],
+                columns=["Good", "Moderate", "Unhealthy", "Very Unhealthy", "Hazardous"],
+            ).to_csv(outdir / f"confusion_matrix_{city_slug}.csv")
 
     if cls_results:
         metrics["classification"] = cls_results

@@ -45,10 +45,14 @@ def parse_args(args: list[str]) -> argparse.Namespace:
     return parser.parse_args(args)
 
 
-def prepare_training_data(df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, LabelEncoder]:
+def prepare_training_data(
+    df: pd.DataFrame,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, LabelEncoder]:
     """Prepare feature matrices and target vectors for regression and classification."""
     # Define feature columns; drop datetime and target columns
-    feature_cols = [col for col in df.columns if col not in {"datetime", "aqi", "aqi_category", "pm2_5", "pm25"}]
+    feature_cols = [
+        col for col in df.columns if col not in {"datetime", "aqi", "aqi_category", "pm2_5", "pm25"}
+    ]
     X = df[feature_cols]
     # Fill missing values with column medians
     X = X.fillna(X.median())
@@ -80,21 +84,20 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     # Train regression model
-    reg_model = RandomForestRegressor(
-        n_estimators=200, random_state=42, n_jobs=-1, max_depth=10
-    )
+    reg_model = RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=-1, max_depth=10)
     reg_model.fit(X_train, y_reg_train)
     y_reg_pred = reg_model.predict(X_val)
     mae = mean_absolute_error(y_reg_val, y_reg_pred)
     print(f"Regression MAE: {mae:.2f} µg/m³")
 
     # Train classification model
-    clf_model = RandomForestClassifier(
-        n_estimators=300, random_state=42, n_jobs=-1, max_depth=10
-    )
+    clf_model = RandomForestClassifier(n_estimators=300, random_state=42, n_jobs=-1, max_depth=10)
     clf_model.fit(X_train, y_clf_train)
     y_clf_pred = clf_model.predict(X_val)
-    print("Classification report:\n", classification_report(y_clf_val, y_clf_pred, target_names=class_names))
+    print(
+        "Classification report:\n",
+        classification_report(y_clf_val, y_clf_pred, target_names=class_names),
+    )
 
     # Save models and label encoder
     reg_path = os.path.join(output_dir, "pm25_regressor.joblib")

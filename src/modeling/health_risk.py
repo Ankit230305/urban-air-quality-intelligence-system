@@ -8,7 +8,9 @@ POLLUTANTS = ["pm2_5", "pm10", "no2", "o3", "so2", "co"]
 def parse_args():
     ap = argparse.ArgumentParser(description="Simple health risk scoring & advisories")
     ap.add_argument("--input-file", required=True, help="features CSV with datetime & pollutants")
-    ap.add_argument("--demographics", required=False, default="data/external/demographics_india.csv")
+    ap.add_argument(
+        "--demographics", required=False, default="data/external/demographics_india.csv"
+    )
     ap.add_argument("--city", required=False, default=None)
     ap.add_argument("--output", required=True, help="where to write health CSV")
     return ap.parse_args()
@@ -53,14 +55,28 @@ def main():
             pass
 
     # coerce numerics
-    for c in POLLUTANTS + ["temp", "humidity", "wind_speed", "precip", "aqi", "population", "pop_density_per_km2",
-                           "pct_elderly", "pct_children", "respiratory_illness_rate_per_100k", "latitude", "longitude"]:
+    for c in POLLUTANTS + [
+        "temp",
+        "humidity",
+        "wind_speed",
+        "precip",
+        "aqi",
+        "population",
+        "pop_density_per_km2",
+        "pct_elderly",
+        "pct_children",
+        "respiratory_illness_rate_per_100k",
+        "latitude",
+        "longitude",
+    ]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
     # ensure aqi_category exists
     if "aqi_category" not in df.columns:
-        df["aqi_category"] = df["pm2_5"].apply(aqi_category_from_pm25) if "pm2_5" in df.columns else "Unknown"
+        df["aqi_category"] = (
+            df["pm2_5"].apply(aqi_category_from_pm25) if "pm2_5" in df.columns else "Unknown"
+        )
 
     # demographics join (optional)
     if args.city and Path(args.demographics).exists():
@@ -68,12 +84,24 @@ def main():
         # simple single-row city match
         row = d.loc[d["city"].str.lower() == args.city.lower()].head(1)
         if not row.empty:
-            for c in ["population", "pop_density_per_km2", "pct_elderly", "pct_children", "respiratory_illness_rate_per_100k"]:
+            for c in [
+                "population",
+                "pop_density_per_km2",
+                "pct_elderly",
+                "pct_children",
+                "respiratory_illness_rate_per_100k",
+            ]:
                 if c in d.columns:
                     df[c] = df[c].fillna(row.iloc[0].get(c))
 
-    elderly = df["pct_elderly"].fillna(8.0).iloc[0] if "pct_elderly" in df.columns and not df.empty else 8.0
-    df["health_risk_score"] = df.get("pm2_5", pd.Series(index=df.index, dtype=float)).apply(lambda x: risk_from_pm25(x, elderly))
+    elderly = (
+        df["pct_elderly"].fillna(8.0).iloc[0]
+        if "pct_elderly" in df.columns and not df.empty
+        else 8.0
+    )
+    df["health_risk_score"] = df.get("pm2_5", pd.Series(index=df.index, dtype=float)).apply(
+        lambda x: risk_from_pm25(x, elderly)
+    )
 
     def band(x):
         if pd.isna(x):
@@ -85,6 +113,7 @@ def main():
         if x < 0.75:
             return "High"
         return "Very High"
+
     df["health_risk_band"] = df["health_risk_score"].apply(band)
 
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)

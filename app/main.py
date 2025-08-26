@@ -8,6 +8,12 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import warnings
+warnings.filterwarnings(
+    'ignore', category=FutureWarning,
+    message='.*DataFrame concatenation with empty or all-NA entries is deprecated.*',
+)
+
 import os
 import requests
 
@@ -386,7 +392,7 @@ def fetch_live_now(city: str, lat: float, lon: float) -> dict:
             if c not in df.columns:
                 df[c] = pd.NA
         df = df.reindex(columns=existing.columns)
-        combined = pd.concat([existing, df], ignore_index=True)
+        combined = safe_concat([existing, df], ignore_index=True)
         combined.to_csv(fplus, index=False)
         return {"path": str(fplus), "rows": len(combined), "appended": 1, "datetime": row["datetime"]}
     else:
@@ -436,3 +442,21 @@ with st.sidebar.expander("🔄 Live data (OpenWeatherMap)", expanded=False):
         except Exception as e:
             st.error(f"Live fetch failed: {e}")
             st.stop()
+
+
+# --- util: future-proof concat that ignores empty/all-NA frames ---
+def safe_concat(frames):
+    import pandas as pd
+    clean = []
+    for f in frames or []:
+        if f is None:
+            continue
+        if hasattr(f, "empty") and not f.empty:
+            # drop all-NA columns to stabilize dtype inference
+            f = f.loc[:, f.notna().any(axis=0)]
+            clean.append(f)
+    if not clean:
+        return pd.DataFrame()
+    cols = sorted(set().union(*[tuple(df.columns) for df in clean]))
+    aligned = [df.reindex(columns=cols) for df in clean]
+    return pd.concat(aligned, ignore_index=True)

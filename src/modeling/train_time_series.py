@@ -23,7 +23,9 @@ def main():
     ap.add_argument("--output-dir", required=True)
     ap.add_argument("--city", default="")
     ap.add_argument("--target", default="pm2_5", help="column to forecast (default: pm2_5)")
-    ap.add_argument("--periods", type=int, default=168, help="future periods (default: 168 hours = 7 days)")
+    ap.add_argument(
+        "--periods", type=int, default=168, help="future periods (default: 168 hours = 7 days)"
+    )
     ap.add_argument("--freq", default="H", help="future frequency (default: H for hourly)")
     args = ap.parse_args()
 

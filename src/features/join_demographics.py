@@ -4,7 +4,9 @@ import pandas as pd
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--features", required=True, help="processed features CSV with a 'datetime' column")
+    ap.add_argument(
+        "--features", required=True, help="processed features CSV with a 'datetime' column"
+    )
     ap.add_argument("--demographics", default="data/external/demographics_india.csv")
     ap.add_argument("--city", required=True, help="City name to match")
     ap.add_argument("--output", required=True)
@@ -26,12 +28,20 @@ def main():
             row = d[m].iloc[0]
 
     if row is None:
-        print(f"[WARN] No demographics match for city='{args.city}' in {args.demographics}. Copying features unchanged.")
+        print(
+            f"[WARN] No demographics match for city='{args.city}' in {args.demographics}. Copying features unchanged."
+        )
         f.to_csv(args.output, index=False)
         return
 
     # broadcast demographics across all rows
-    for c in ["population", "pop_density_per_km2", "pct_elderly", "pct_children", "respiratory_illness_rate_per_100k"]:
+    for c in [
+        "population",
+        "pop_density_per_km2",
+        "pct_elderly",
+        "pct_children",
+        "respiratory_illness_rate_per_100k",
+    ]:
         if c in d.columns:
             f[c] = row.get(c)
 
