@@ -23,7 +23,7 @@ def test_merge_and_feature_engineer():
             "wind_speed": [5.0, 4.5],
         }
     )
-    result = merge_and_feature_engineer(pollution_data, weather_data, temporal_resolution="H")
+    result = merge_and_feature_engineer(pollution_data, weather_data, temporal_resolution="H")  # noqa: E501
     # Expect 2 rows
     assert len(result) == 2
     # Check that AQI and category exist
