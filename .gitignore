@@ -70,3 +70,6 @@ models/
 urban-air-quality-intelligence-system/
 data/
 reports/
+build/
+dist/
+
