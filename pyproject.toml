@@ -12,6 +12,7 @@ license = { text = "MIT" }
 authors = [{ name = "Ankit Reddy", email = "ankitreddy@example.com" }]
 
 dependencies = [
+    "watchdog",
     "statsmodels",
     "mlxtend",
     "overpy",
