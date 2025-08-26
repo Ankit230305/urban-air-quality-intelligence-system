@@ -8,6 +8,9 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import os
+import requests
+
 
 st.set_page_config(page_title="Urban Air Quality Intelligence", layout="wide")
 
@@ -312,3 +315,124 @@ with tabs[6]:
         st.info("No health file found (data/processed/*_health.csv).")
     else:
         st.dataframe(hdf.tail(50), use_container_width=True)
+
+
+
+# --- Live fetch helper (OpenWeatherMap) ---
+def fetch_live_now(city: str, lat: float, lon: float) -> dict:
+    """
+    Fetch current air pollution + weather from OpenWeatherMap and append one row
+    into data/processed/<slug>__features_plus_demo.csv. Returns info dict.
+    """
+    import pandas as pd
+    from pathlib import Path
+    from datetime import datetime, timezone
+
+    key = os.getenv("OPENWEATHERMAP_API_KEY")
+    if not key:
+        raise RuntimeError("Missing OPENWEATHERMAP_API_KEY in environment.")
+
+    # Current air pollution
+    aq = requests.get(
+        "https://api.openweathermap.org/data/2.5/air_pollution",
+        params={"lat": lat, "lon": lon, "appid": key},
+        timeout=30,
+    ).json()
+
+    # Current weather (metric)
+    wx = requests.get(
+        "https://api.openweathermap.org/data/2.5/weather",
+        params={"lat": lat, "lon": lon, "appid": key, "units": "metric"},
+        timeout=30,
+    ).json()
+
+    comp = aq["list"][0]["components"]
+    aqi  = aq["list"][0]["main"]["aqi"]
+    tm   = datetime.fromtimestamp(aq["list"][0]["dt"], tz=timezone.utc).replace(tzinfo=None)
+
+    row = {
+        "datetime": tm.isoformat(sep=" "),
+        "pm2_5": comp.get("pm2_5"),
+        "pm10": comp.get("pm10"),
+        "no2":  comp.get("no2"),
+        "o3":   comp.get("o3"),
+        "so2":  comp.get("so2"),
+        "co":   comp.get("co"),
+        "aqi": aqi,
+        "temp": wx["main"]["temp"],
+        "humidity": wx["main"]["humidity"],
+        "wind_speed": wx["wind"]["speed"],
+        "precip": (wx.get("rain", {}).get("1h", 0.0)
+                   or wx.get("snow", {}).get("1h", 0.0) or 0.0),
+        "city": city,
+    }
+    df = pd.DataFrame([row])
+
+    slug = city.lower().replace(" ", "_")
+    outdir = Path("data/processed"); outdir.mkdir(parents=True, exist_ok=True)
+    fplus = outdir / f"{slug}__features_plus_demo.csv"
+
+    try:
+        existing = pd.read_csv(fplus, parse_dates=["datetime"])
+    except Exception:
+        existing = None
+
+    if existing is not None:
+        # keep existing columns (e.g., demographics), coerce numerics
+        for c in ["pm2_5","pm10","no2","o3","so2","co","aqi","temp","humidity","wind_speed","precip"]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+        for c in existing.columns:
+            if c not in df.columns:
+                df[c] = pd.NA
+        df = df.reindex(columns=existing.columns)
+        combined = pd.concat([existing, df], ignore_index=True)
+        combined.to_csv(fplus, index=False)
+        return {"path": str(fplus), "rows": len(combined), "appended": 1, "datetime": row["datetime"]}
+    else:
+        df.to_csv(fplus, index=False)
+        return {"path": str(fplus), "rows": 1, "appended": 1, "datetime": row["datetime"]}
+
+
+
+# --- Sidebar: Live data fetch (OpenWeatherMap) ---
+with st.sidebar.expander("🔄 Live data (OpenWeatherMap)", expanded=False):
+    # Try to reuse existing city/lat/lon if your app already defines them
+    _city = None; _lat = None; _lon = None
+    try:
+        _city = city  # from main app state if available
+    except Exception:
+        pass
+    try:
+        _lat = float(lat)   # from main app state if available
+        _lon = float(lon)
+    except Exception:
+        pass
+
+    if _city is None or _lat is None or _lon is None:
+        _city = st.text_input("City", value="Mumbai", key="live_city")
+        _lat  = st.number_input("Latitude", value=19.0760, format="%.6f", key="live_lat")
+        _lon  = st.number_input("Longitude", value=72.877700, format="%.6f", key="live_lon")
+    else:
+        st.caption(f"Using current selection: {_city} ({_lat:.4f}, {_lon:.4f})")
+
+    col_a, col_b = st.columns([1,1])
+    do_fetch = col_a.button("Fetch live now", key="btn_fetch_live_now")
+    show_path = col_b.checkbox("Show output path", value=False, key="live_show_path")
+
+    if do_fetch:
+        try:
+            info = fetch_live_now(_city, _lat, _lon)
+            # Invalidate any cached readers (if your app uses @st.cache_data)
+            if hasattr(st, "cache_data"):
+                try:
+                    st.cache_data.clear()
+                except Exception:
+                    pass
+            st.success(f"Appended live row ({info['datetime']}) → {info['path'] if show_path else 'processed file'}")
+            # On modern Streamlit versions, this will refresh charts/tables
+            if hasattr(st, "rerun"):
+                st.rerun()
+        except Exception as e:
+            st.error(f"Live fetch failed: {e}")
+            st.stop()
