@@ -1,8 +1,9 @@
 district,city,population,pop_density_per_km2,pct_elderly,pct_children,respiratory_illness_rate_per_100k
-Vellore,Vellore,,,,
-Chennai,Chennai,,,,
-Bengaluru Urban,Bengaluru,,,,
-Hyderabad,Hyderabad,,,,
-Kolkata,Kolkata,,,,
-Mumbai Suburban,Mumbai,,,,
-Delhi,Delhi,,,,
+Delhi,Delhi,19814000,11320,8.5,24.0,950
+Mumbai Suburban,Mumbai,15500000,20500,7.9,23.2,880
+Bengaluru Urban,Bengaluru,12700000,4380,7.4,22.1,760
+Chennai,Chennai,11300000,27000,8.2,22.8,820
+Hyderabad,Hyderabad,10000000,10500,7.6,23.9,800
+Kolkata,Kolkata,14800000,24800,9.1,20.5,910
+Visakhapatnam,Vizag,2200000,3850,8.0,24.5,700
+Vellore,Vellore,1600000,1800,9.3,21.8,680

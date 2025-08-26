@@ -1,89 +1,20 @@
-"""Feature engineering utilities for air quality datasets.
-
-This module defines functions to merge raw sensor and weather data into
-machine‑learning‑ready tables.  It includes logic for computing derived
-features (e.g. hourly averages, daily means) and generating target labels
-for classification and regression tasks.
-
-The functions in this file are designed to operate on pandas DataFrames
-produced by the data collection scripts.  All timestamps are assumed to
-be in UTC and formatted as ISO strings.  You may need to adjust the
-conversion if your raw data contains timezone information.
-"""
-
 from __future__ import annotations
 
-import pandas as pd
 import numpy as np
-from typing import Optional
+import pandas as pd
+
+POLLUTANT_COLS = ["pm2_5", "pm10", "o3", "no2", "so2", "co"]
+WEATHER_COLS   = ["temp", "humidity", "wind_speed", "precip"]
 
 
-def standardise_datetime(df: pd.DataFrame, column: str = "datetime") -> pd.DataFrame:
-    """Ensure a DataFrame has a proper datetime index.
-
-    Parameters
-    ----------
-    df : pandas.DataFrame
-        Input data with a datetime column.
-    column : str, default "datetime"
-        Name of the column containing ISO timestamps.
-
-    Returns
-    -------
-    pandas.DataFrame
-        DataFrame indexed by pandas.Timestamp objects.
-    """
-    df = df.copy()
-    df[column] = pd.to_datetime(df[column], errors="coerce", utc=True)
-    df = df.set_index(column)
-    df = df.sort_index()
-    return df
-
-
-def compute_aqi_pm25(value: float) -> float:
-    """Convert PM2.5 concentration (µg/m³) to AQI based on EPA breakpoints.
-
-    The US EPA defines breakpoints for calculating the Air Quality Index
-    from PM2.5 concentrations.  This function implements a linear
-    interpolation between breakpoints.  See
-    https://forum.airnowtech.org/t/the-aqi-equation/169 for details.
-
-    Parameters
-    ----------
-    value : float
-        PM2.5 concentration in micrograms per cubic metre.
-
-    Returns
-    -------
-    float
-        The corresponding AQI value.
-    """
-    # Define breakpoints for PM2.5 (µg/m³) and corresponding AQI values.
-    breakpoints = [
-        (0.0, 12.0, 0, 50),
-        (12.1, 35.4, 51, 100),
-        (35.5, 55.4, 101, 150),
-        (55.5, 150.4, 151, 200),
-        (150.5, 250.4, 201, 300),
-        (250.5, 350.4, 301, 400),
-        (350.5, 500.0, 401, 500),
-    ]
-    for c_low, c_high, i_low, i_high in breakpoints:
-        if c_low <= value <= c_high:
-            return ((i_high - i_low) / (c_high - c_low)) * (value - c_low) + i_low
-    return np.nan
-
-
-def aqi_category(aqi: float) -> str:
-    """Categorise an AQI value into descriptive buckets."""
+def aqi_category(aqi: float) -> str | float:
+    """Simple AQI category mapping (EPA-like)."""
     if pd.isna(aqi):
-        return "Unknown"
+        return np.nan
     if aqi <= 50:
         return "Good"
     if aqi <= 100:
         return "Moderate"
-    if aqi <= 150:
-        return "Unhealthy for Sensitive Groups"
     if aqi <= 200:
         return "Unhealthy"
     if aqi <= 300:
@@ -91,79 +22,122 @@ def aqi_category(aqi: float) -> str:
     return "Hazardous"
 
 
+def compute_aqi_from_pm25(pm25: pd.Series) -> pd.Series:
+    """Compute AQI from PM2.5 using EPA-style breakpoints."""
+    bps = [
+        (0.0, 12.0, 0, 50),
+        (12.1, 35.4, 51, 100),
+        (35.5, 55.4, 101, 150),
+        (55.5, 150.4, 151, 200),
+        (150.5, 250.4, 201, 300),
+        (250.5, 350.4, 301, 400),
+        (350.5, 500.4, 401, 500),
+    ]
+
+    def calc(x):
+        if pd.isna(x):
+            return np.nan
+        for Cl, Ch, Il, Ih in bps:
+            if x <= Ch:
+                return (Ih - Il) / (Ch - Cl) * (x - Cl) + Il
+        return 500.0
+
+    return pm25.apply(calc)
+
+
+def standardise_datetime(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ensure a tz-naive UTC index named 'datetime', sorted.
+    """
+    df = df.copy()
+    if "datetime" not in df.columns:
+        raise ValueError("Input DataFrame must contain a 'datetime' column.")
+    dt = pd.to_datetime(df["datetime"], utc=True, errors="coerce")
+    # Make tz-naive (UTC) so joins/filters are comparable
+    dt = dt.dt.tz_convert(None)
+    df["datetime"] = dt
+    df = df.dropna(subset=["datetime"]).sort_values("datetime").set_index("datetime")
+    return df
+
+
 def merge_and_feature_engineer(
     pollution_df: pd.DataFrame,
     weather_df: pd.DataFrame,
-    temporal_resolution: str = "H",
+    temporal_resolution: str = "1h",
 ) -> pd.DataFrame:
-    """Merge pollutant measurements with weather data and compute features.
-
-    The function aligns both DataFrames on a common time index (rounded
-    according to `temporal_resolution`), aggregates measurements within
-    each time bin and computes derived features such as AQI and its
-    categorical class.
-
-    Parameters
-    ----------
-    pollution_df : pandas.DataFrame
-        DataFrame with columns including 'datetime', pollutant names and optionally 'aqi'.
-    weather_df : pandas.DataFrame
-        DataFrame with columns including 'datetime', 'temp', 'humidity', etc.
-    temporal_resolution : str, default 'H'
-        Pandas offset alias for resampling (e.g. 'H' for hourly, 'D' for daily).
-
-    Returns
-    -------
-    pandas.DataFrame
-        Merged and feature‑engineered DataFrame ready for modelling.
     """
-    # Standardise datetime indices
+    Merge pollutant + weather on datetime, resampled to temporal_resolution.
+    Returns columns: datetime, pollutants, weather, (latitude,longitude if available),
+    and computed AQI + category (if missing).
+    """
+    # --- standardise and coerce numerics ---
     p_df = standardise_datetime(pollution_df)
     w_df = standardise_datetime(weather_df)
 
-    # Resample pollutant data to the target resolution (e.g. hourly)
-    pollutant_columns = [col for col in p_df.columns if col not in {"location", "city", "unit", "parameter"}]
-    # For OpenAQ data, there may be multiple parameters; pivot to wide format
-    if "parameter" in p_df.columns and "value" in p_df.columns:
-        pivot_df = p_df.pivot_table(
-            values="value",
-            index=p_df.index,
-            columns="parameter",
-            aggfunc="mean",
-        )
-        pollutant_resampled = pivot_df.resample(temporal_resolution).mean()
-    else:
-        pollutant_resampled = p_df[pollutant_columns].resample(temporal_resolution).mean()
+    for c in POLLUTANT_COLS + ["latitude", "longitude"]:
+        if c in p_df.columns:
+            p_df[c] = pd.to_numeric(p_df[c], errors="coerce")
 
-    # Resample weather data
-    weather_cols = [c for c in ['temp','humidity','wind_speed','precip'] if c in w_df.columns]
+    for c in WEATHER_COLS + ["latitude", "longitude"]:
+        if c in w_df.columns:
+            w_df[c] = pd.to_numeric(w_df[c], errors="coerce")
+
+    # --- choose columns and resample ---
+    pollutant_columns = [c for c in POLLUTANT_COLS if c in p_df.columns]
+    keep_loc_cols     = [c for c in ["latitude", "longitude"] if c in p_df.columns]
+
+    pollutant_resampled = p_df[
+        [c for c in pollutant_columns + keep_loc_cols if c in p_df.columns]
+    ].resample(temporal_resolution).mean()
+
+    weather_cols = [c for c in WEATHER_COLS if c in w_df.columns]
+    # coerce to numeric already done; just resample
     weather_resampled = w_df[weather_cols].resample(temporal_resolution).mean()
 
-    # Merge on datetime
-    lat = None; lon = None
-    for _df in (p_df, w_df):
-        lat = (float(_df['latitude'].dropna().median()) if lat is None and 'latitude' in _df.columns and _df['latitude'].notna().any() else lat)
-        lon = (float(_df['longitude'].dropna().median()) if lon is None and 'longitude' in _df.columns and _df['longitude'].notna().any() else lon)
-    lat = None; lon = None
-    for _df in (p_df, w_df):
-        lat = (float(_df['latitude'].dropna().median()) if lat is None and 'latitude' in _df.columns and _df['latitude'].notna().any() else lat)
-        lon = (float(_df['longitude'].dropna().median()) if lon is None and 'longitude' in _df.columns and _df['longitude'].notna().any() else lon)
-    merged = pollutant_resampled.join(weather_resampled, how='outer')
-    if lat is not None: merged['latitude'] = lat
-    if lon is not None: merged['longitude'] = lon
-    if lat is not None: merged['latitude'] = lat
-    if lon is not None: merged['longitude'] = lon
-    merged = merged.reset_index().rename(columns={"index": "datetime"})
+    # --- join without column overlap issues (we excluded weather lat/lon) ---
+    merged = pollutant_resampled.join(weather_resampled, how="outer")
 
-    # Compute AQI from PM2.5 if available
-    if "pm25" in merged.columns:
-        merged["aqi"] = merged["pm25"].apply(compute_aqi_pm25)
-        merged["aqi_category"] = merged["aqi"].apply(aqi_category)
-    elif "pm2_5" in merged.columns:
-        merged["aqi"] = merged["pm2_5"].apply(compute_aqi_pm25)
-        merged["aqi_category"] = merged["aqi"].apply(aqi_category)
-    else:
-        merged["aqi"] = np.nan
-        merged["aqi_category"] = "Unknown"
+    # if we didn't have lat/lon in pollutants, try to derive from either frame
+    if not keep_loc_cols:
+        for src in (p_df, w_df):
+            for c in ["latitude", "longitude"]:
+                if c in src.columns:
+                    series = src[c].resample(temporal_resolution).mean()
+                    if c not in merged.columns:
+                        merged[c] = series
+                    else:
+                        merged[c] = merged[c].fillna(series)
+        for c in ["latitude", "longitude"]:
+            if c in merged.columns:
+                merged[c] = merged[c].interpolate(limit_direction="both")
 
-    return merged
+    # Fill weather gaps for charts
+    for c in weather_cols:
+        merged[c] = merged[c].interpolate(limit_direction="both").ffill().bfill()
+
+    # --- AQI ---
+    if "aqi" not in merged.columns:
+        if "pm2_5" in merged.columns:
+            merged["aqi"] = compute_aqi_from_pm25(merged["pm2_5"])
+        elif "pm10" in merged.columns:
+            # rough mapping if pm2_5 missing
+            merged["aqi"] = compute_aqi_from_pm25(merged["pm10"] * 0.5)
+        else:
+            merged["aqi"] = np.nan
+
+    merged["aqi_category"] = merged["aqi"].apply(aqi_category)
+
+    merged = merged.reset_index()
+
+    # order columns nicely if present
+    preferred = (
+        ["datetime"]
+        + [c for c in POLLUTANT_COLS if c in merged.columns]
+        + ["latitude", "longitude"]
+        + [c for c in WEATHER_COLS if c in merged.columns]
+        + ["aqi", "aqi_category"]
+    )
+    cols = [c for c in preferred if c in merged.columns] + [
+        c for c in merged.columns if c not in preferred
+    ]
+    return merged[cols]

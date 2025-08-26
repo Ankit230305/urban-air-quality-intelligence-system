@@ -1,102 +1,245 @@
-import argparse
+import argparse, json
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, accuracy_score, f1_score
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-import joblib
 
-def make_aqi_cat(aqi):
-    try:
-        aqi = float(aqi)
-    except Exception:
-        return np.nan
-    if aqi < 51: return "Good"
-    if aqi < 101: return "Moderate"
-    if aqi < 201: return "Unhealthy"
-    if aqi < 301: return "Very Unhealthy"
+from sklearn.ensemble import (
+    RandomForestRegressor,
+    GradientBoostingRegressor,
+    RandomForestClassifier,
+    HistGradientBoostingRegressor,
+)
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import (
+    mean_absolute_error, mean_squared_error, r2_score,
+    accuracy_score, f1_score, confusion_matrix
+)
+import joblib
+import warnings
+
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+
+POLLUTANTS = ["pm2_5","pm10","no2","o3","so2","co"]
+WEATHER    = ["temp","humidity","wind_speed","precip"]
+
+def slug_of(city: str) -> str:
+    return "".join(ch if ch.isalnum() else "_" for ch in city.lower())
+
+def aqi_category(pm25: float) -> str:
+    if pm25 < 51:  return "Good"
+    if pm25 < 101: return "Moderate"
+    if pm25 < 201: return "Unhealthy"
+    if pm25 < 301: return "Very Unhealthy"
     return "Hazardous"
+
+def build_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy().sort_values("datetime")
+    # coerce numeric
+    for c in POLLUTANTS + WEATHER + ["aqi","latitude","longitude"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    # time features
+    if "datetime" in df.columns:
+        df["hour"] = df["datetime"].dt.hour
+        df["dow"]  = df["datetime"].dt.dayofweek
+    else:
+        df["hour"] = 0
+        df["dow"]  = 0
+    # lags/rolls
+    if "pm2_5" in df.columns:
+        df["pm2_5_lag1"]   = df["pm2_5"].shift(1)
+        df["pm2_5_lag3"]   = df["pm2_5"].shift(3)
+        df["pm2_5_roll6h"] = df["pm2_5"].rolling(6, min_periods=1).mean()
+    return df
+
+def safe_feature_list(df: pd.DataFrame, target: str) -> list:
+    base = ["hour","dow","temp","humidity","wind_speed","precip","pm2_5_lag1","pm2_5_roll6h"]
+    feats = [c for c in base + POLLUTANTS if (c in df.columns and c != target)]
+    # dedupe preserving order
+    seen=set(); out=[]
+    for c in feats:
+        if c not in seen:
+            seen.add(c); out.append(c)
+    # minimal fallbacks
+    for c in ["hour","temp","humidity","wind_speed","precip"]:
+        if c in df.columns and c not in out:
+            out.append(c)
+    return out
+
+def numeric_only(df: pd.DataFrame, cols: list) -> pd.DataFrame:
+    X = df[cols].copy()
+    for c in X.columns:
+        X[c] = pd.to_numeric(X[c], errors="coerce")
+    keep = [c for c in X.columns if np.issubdtype(X[c].dtype, np.number)]
+    return X[keep]
+
+def fill_and_prune(X: pd.DataFrame) -> pd.DataFrame:
+    """Fill medians; drop columns that remain all-NaN (e.g., no data at all)."""
+    X = X.copy()
+    med = X.median(numeric_only=True)
+    X = X.fillna(med)
+    # drop columns still all-NaN or constant (optional)
+    drop_cols = [c for c in X.columns if X[c].isna().all()]
+    if drop_cols:
+        X = X.drop(columns=drop_cols)
+    const_cols = [c for c in X.columns if X[c].nunique(dropna=True) <= 1]
+    if const_cols:
+        X = X.drop(columns=const_cols)
+    return X
+
+def split_time_ordered(X: pd.DataFrame, y: pd.Series, min_test: int = 1):
+    n = len(X)
+    if n <= min_test:
+        return X.iloc[:0], X, y.iloc[:0], y
+    test_size = max(int(round(n*0.2)), min_test)
+    split_idx = n - test_size
+    return X.iloc[:split_idx], X.iloc[split_idx:], y.iloc[:split_idx], y.iloc[split_idx:]
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--input-file", required=True)
-    ap.add_argument("--output-dir", required=True)
-    ap.add_argument("--city", required=True)
+    ap.add_argument("--input-file",  required=True)
+    ap.add_argument("--output-dir",  required=True)
+    ap.add_argument("--city",        required=True)
+    ap.add_argument("--target",      default="pm2_5")
     args = ap.parse_args()
 
-    outdir = Path(args.output_dir)
-    outdir.mkdir(parents=True, exist_ok=True)
+    outdir = Path(args.output_dir); outdir.mkdir(parents=True, exist_ok=True)
+    city_slug = slug_of(args.city)
 
     df = pd.read_csv(args.input_file, parse_dates=["datetime"]).sort_values("datetime")
-    # features to use (whatever is available)
-    X_cols = [c for c in ["temp","humidity","wind_speed","precip","pm10","no2","o3","so2","co"] if c in df.columns]
-    if "pm2_5" not in df.columns or len(X_cols) == 0:
-        raise SystemExit("Insufficient columns. Need pm2_5 and at least one of: " + ", ".join(["temp","humidity","wind_speed","precip","pm10","no2","o3","so2","co"]))
+    df = build_features(df)
 
-    # --- Coerce numeric ---
-    for col in X_cols + ["pm2_5"]:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+    # ---------------- REGRESSION: y = pm2_5 ----------------
+    metrics = {"city": args.city}
+    reg_results = {}
 
-    # --- Impute features robustly: ffill/bfill then median for any remaining ---
-    X_all = df[X_cols].copy()
-    X_all = X_all.ffill().bfill()
-    X_all = X_all.fillna(X_all.median(numeric_only=True))
+    if args.target not in df.columns:
+        metrics["regression"] = {}
+        (outdir / f"supervised_metrics_{city_slug}.json").write_text(json.dumps(metrics, indent=2))
+        print(json.dumps(metrics, indent=2))
+        return
 
-    # --- Interpolate pm2_5 target and drop remaining NaN ---
-    y_all = df["pm2_5"].interpolate(limit_direction="both")
-    mask = y_all.notna() & X_all.notna().all(axis=1)
-    X = X_all.loc[mask].to_numpy()
-    y = y_all.loc[mask].to_numpy(dtype=float)
+    feats = safe_feature_list(df, args.target)
+    reg_df = df.dropna(subset=[args.target]).copy()
+    y = pd.to_numeric(reg_df[args.target], errors="coerce")
+    ok = y.notna()
+    reg_df = reg_df.loc[ok]
+    y = y.loc[ok]
 
-    if len(y) < 10:
-        raise SystemExit(f"Not enough clean rows after preprocessing: {len(y)}")
+    X_raw = numeric_only(reg_df, feats)
+    feats = list(X_raw.columns)               # lock names after numeric filter
+    X_imp = fill_and_prune(X_raw)
 
-    # Temporal split (no shuffle)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=max(1, int(0.2*len(y))), shuffle=False)
+    # align y to X_imp
+    y = y.loc[X_imp.index]
 
-    # ------- Regression: predict pm2_5 -------
-    reg = RandomForestRegressor(n_estimators=300, random_state=42)
-    reg.fit(X_train, y_train)
-    y_pred = reg.predict(X_test)
+    X_train, X_test, y_train, y_test = split_time_ordered(X_imp, y, min_test=1)
 
-    # Filter any NaNs just in case
-    valid = np.isfinite(y_test) & np.isfinite(y_pred)
-    mae  = mean_absolute_error(y_test[valid], y_pred[valid])
-    mse = mean_squared_error(y_test[valid], y_pred[valid]); rmse = mse**0.5
-    r2   = r2_score(y_test[valid], y_pred[valid])
+    preds_store = {}
 
-    joblib.dump(reg, outdir / f"rf_regressor_{args.city.lower().replace(' ','_')}.joblib")
+    if len(X_train) and len(X_test):
+        # A) RandomForestRegressor
+        rf = RandomForestRegressor(n_estimators=300, random_state=42, n_jobs=-1)
+        rf.fit(X_train, y_train)
+        ypr = rf.predict(X_test)
+        reg_results["RandomForestRegressor"] = {
+            "MAE":  float(mean_absolute_error(y_test, ypr)),
+            "RMSE": float(np.sqrt(mean_squared_error(y_test, ypr))),
+            "R2":   float(r2_score(y_test, ypr)),
+        }
+        preds_store["rf"] = (y_test, ypr)
+        pd.DataFrame({"feature": list(X_train.columns), "importance": rf.feature_importances_}) \
+            .sort_values("importance", ascending=False) \
+            .to_csv(outdir / f"feature_importance_rf_{city_slug}.csv", index=False)
+        joblib.dump({"model": rf, "features": list(X_train.columns)}, outdir / f"rf_regressor_{city_slug}.pkl")
 
-    # ------- Classification: AQI category (optional if aqi exists) -------
-    acc = f1 = np.nan
-    if "aqi" in df.columns:
-        df["aqi_cat"] = df["aqi"].apply(make_aqi_cat)
-        cls_mask = mask & df["aqi_cat"].notna()
-        # Use the same X preprocessed rows aligned via mask
-        Xc = X_all.loc[cls_mask]
-        yc = df.loc[cls_mask, "aqi_cat"]
-        if len(yc) > 20 and yc.nunique() > 1:
-            Xc = Xc.to_numpy()
-            # temporal split
-            Xc_train, Xc_test, yc_train, yc_test = train_test_split(Xc, yc, test_size=max(1, int(0.2*len(yc))), shuffle=False)
-            clf = RandomForestClassifier(n_estimators=300, random_state=42, class_weight="balanced")
-            clf.fit(Xc_train, yc_train)
-            yc_pred = clf.predict(Xc_test)
-            acc = accuracy_score(yc_test, yc_pred)
-            f1  = f1_score(yc_test, yc_pred, average="weighted")
-            joblib.dump(clf, outdir / f"rf_classifier_{args.city.lower().replace(' ','_')}.joblib")
+        # B) GradientBoostingRegressor (fallback to HistGBR if NaNs raise)
+        try:
+            gbr = GradientBoostingRegressor(random_state=42)
+            gbr.fit(X_train, y_train)
+            ypg = gbr.predict(X_test)
+            reg_results["GradientBoostingRegressor"] = {
+                "MAE":  float(mean_absolute_error(y_test, ypg)),
+                "RMSE": float(np.sqrt(mean_squared_error(y_test, ypg))),
+                "R2":   float(r2_score(y_test, ypg)),
+            }
+            preds_store["gbr"] = (y_test, ypg)
+            # feature_importances_ exists for GBR
+            pd.DataFrame({"feature": list(X_train.columns), "importance": gbr.feature_importances_}) \
+                .sort_values("importance", ascending=False) \
+                .to_csv(outdir / f"feature_importance_gbr_{city_slug}.csv", index=False)
+            joblib.dump({"model": gbr, "features": list(X_train.columns)}, outdir / f"gbr_regressor_{city_slug}.pkl")
+        except ValueError:
+            # NaN-tolerant alternative
+            hgb = HistGradientBoostingRegressor(random_state=42)
+            hgb.fit(X_train, y_train)
+            yph = hgb.predict(X_test)
+            reg_results["HistGradientBoostingRegressor"] = {
+                "MAE":  float(mean_absolute_error(y_test, yph)),
+                "RMSE": float(np.sqrt(mean_squared_error(y_test, yph))),
+                "R2":   float(r2_score(y_test, yph)),
+            }
+            preds_store["gbr"] = (y_test, yph)  # keep key 'gbr' for selection below
+            # HGBR has no feature_importances_
+            joblib.dump({"model": hgb, "features": list(X_train.columns)}, outdir / f"hgb_regressor_{city_slug}.pkl")
 
-    # Report
-    rep = outdir / f"supervised_report_{args.city.lower().replace(' ','_')}.md"
-    with open(rep, "w") as f:
-        f.write(f"# Supervised Models – {args.city}\n\n")
-        f.write("## Regression (PM2.5)\n")
-        f.write(f"- MAE: {mae:.3f}\n- RMSE: {rmse:.3f}\n- R²: {r2:.3f}\n\n")
-        f.write("## Classification (AQI category)\n")
-        f.write(f"- Accuracy: {acc}\n- F1 (weighted): {f1}\n")
+        # Write predictions for the better of the two
+        best_key = min(reg_results, key=lambda k: reg_results[k]["RMSE"])
+        y_true, y_pred = preds_store["rf" if best_key.startswith("RandomForest") else "gbr"]
+        pred_df = reg_df.loc[y_true.index, ["datetime"]].copy()
+        pred_df["pm2_5_true"] = y_true.values
+        pred_df["pm2_5_pred"] = y_pred
+        pred_df.to_csv(Path("data/processed") / f"{city_slug}_predictions.csv", index=False)
 
-    print(f"✅ Saved models+report to {outdir}")
+    metrics["regression"] = reg_results
+
+    # ---------------- CLASSIFICATION: AQI category ----------------
+    cls_results = {}
+    if "pm2_5" in df.columns and len(df) >= 5:
+        cls_df = df.dropna(subset=["pm2_5"]).copy()
+        cls_df["aqi_cat"] = cls_df["pm2_5"].apply(aqi_category)
+        cls_feats_raw = [c for c in list(X_imp.columns) if c != "pm2_5"]  # reuse reg feats
+        Xc_raw = numeric_only(cls_df, cls_feats_raw)
+        Xc_imp = fill_and_prune(Xc_raw)
+        yc = cls_df["aqi_cat"].loc[Xc_imp.index]
+
+        Xtr, Xte, ytr, yte = split_time_ordered(Xc_imp, yc, min_test=1)
+
+        if len(Xtr) and len(Xte) and len(set(ytr)) >= 2:
+            # Logistic Regression
+            lr = LogisticRegression(max_iter=200)
+            lr.fit(Xtr, ytr)
+            yhat = lr.predict(Xte)
+            cls_results["LogisticRegression"] = {
+                "accuracy": float(accuracy_score(yte, yhat)),
+                "f1_macro": float(f1_score(yte, yhat, average="macro")),
+            }
+            joblib.dump({"model": lr, "features": list(Xtr.columns)}, outdir / f"lr_classifier_{city_slug}.pkl")
+            cm = confusion_matrix(yte, yhat, labels=["Good","Moderate","Unhealthy","Very Unhealthy","Hazardous"])
+            pd.DataFrame(cm, index=["Good","Moderate","Unhealthy","Very Unhealthy","Hazardous"],
+                            columns=["Good","Moderate","Unhealthy","Very Unhealthy","Hazardous"]) \
+                .to_csv(outdir/f"confusion_matrix_{city_slug}.csv")
+
+            # RandomForestClassifier
+            rfc = RandomForestClassifier(n_estimators=300, random_state=42, n_jobs=-1)
+            rfc.fit(Xtr, ytr)
+            yhat = rfc.predict(Xte)
+            cls_results["RandomForestClassifier"] = {
+                "accuracy": float(accuracy_score(yte, yhat)),
+                "f1_macro": float(f1_score(yte, yhat, average="macro")),
+            }
+            joblib.dump({"model": rfc, "features": list(Xtr.columns)}, outdir / f"rfc_classifier_{city_slug}.pkl")
+            cm = confusion_matrix(yte, yhat, labels=["Good","Moderate","Unhealthy","Very Unhealthy","Hazardous"])
+            pd.DataFrame(cm, index=["Good","Moderate","Unhealthy","Very Unhealthy","Hazardous"],
+                            columns=["Good","Moderate","Unhealthy","Very Unhealthy","Hazardous"]) \
+                .to_csv(outdir/f"confusion_matrix_{city_slug}.csv")
+
+    if cls_results:
+        metrics["classification"] = cls_results
+
+    (outdir / f"supervised_metrics_{city_slug}.json").write_text(json.dumps(metrics, indent=2))
+    print(json.dumps(metrics, indent=2))
 
 if __name__ == "__main__":
     main()

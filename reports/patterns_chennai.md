@@ -1,5 +1,13 @@
-# Pattern Discovery – Chennai
+# Pattern discovery — Chennai
 
-- Features used for clustering: ['pm2_5', 'pm10', 'no2', 'o3', 'so2', 'co', 'temp', 'humidity', 'wind_speed', 'precip']
-- Clustering skipped (insufficient data).
-- Association rules saved: assoc_rules_chennai.csv (rows=0)
+- Daily rows: **24**
+- Clusters present: **3**
+- Association rules: **35494**
+
+Top 5 rules by lift:
+
+- **pm10=med ⇒ pm2_5=med** (support 0.25, conf 1.00, lift 4.00)
+- **pm2_5=med ⇒ pm10=med** (support 0.25, conf 1.00, lift 4.00)
+- **pm10=med, temp=med ⇒ pm2_5=med** (support 0.25, conf 1.00, lift 4.00)
+- **pm2_5=med, temp=med ⇒ pm10=med** (support 0.25, conf 1.00, lift 4.00)
+- **pm10=med ⇒ pm2_5=med, temp=med** (support 0.25, conf 1.00, lift 4.00)

@@ -60,4 +60,15 @@ python -m src.modeling.health_risk \
   --city "$CITY" \
   --output "data/processed/${SLUG}_health.csv"
 
+python -m src.modeling.train_supervised \
+  --input-file "data/processed/${SLUG}_features_plus_demo.csv" \
+  --output-dir models \
+  --city "$CITY"
+
+python -m src.modeling.health_risk \
+  --input-file "data/processed/${SLUG}_features_plus_demo.csv" \
+  --demographics "data/external/demographics_india.csv" \
+  --city "$CITY" \
+  --output "data/processed/${SLUG}_health.csv"
+
 echo "OK: built city=${CITY} slug=${SLUG}"

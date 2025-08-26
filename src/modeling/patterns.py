@@ -1,97 +1,194 @@
+# Pattern discovery: daily seasonality, clustering, and simple association rules
+from __future__ import annotations
+
 import argparse
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import StandardScaler
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
-from mlxtend.frequent_patterns import apriori, association_rules
 
-def seasonal_trends(df: pd.DataFrame) -> pd.DataFrame:
-    g = df.set_index("datetime").copy()
-    out = []
-    # daily means
-    d = g.resample("D").mean(numeric_only=True).reset_index()
-    d["dow"] = d["datetime"].dt.dayofweek
-    d["month"] = d["datetime"].dt.month
-    return d
 
-def do_clustering(daily: pd.DataFrame, features, k=3):
-    X = daily[features].dropna().copy()
-    if X.empty:
-        return None, None, None
-    Z = StandardScaler().fit_transform(X)
-    km = KMeans(n_clusters=k, n_init="auto", random_state=42)
-    labels = km.fit_predict(Z)
-    sil = silhouette_score(Z, labels) if len(set(labels))>1 else np.nan
-    return labels, sil, km
+def _slugify(city: str) -> str:
+    return city.lower().replace(" ", "_")
 
-def discretize_for_rules(df: pd.DataFrame, cols_bins: dict):
-    disc = {}
-    for col, bins in cols_bins.items():
-        if col not in df: continue
-        disc[col] = pd.cut(df[col], bins=bins, labels=False, include_lowest=True)
-    return pd.DataFrame(disc, index=df.index)
 
-def mine_rules(df: pd.DataFrame):
-    # example: rules between weather and pm2_5 levels
-    use = df[["pm2_5","temp","humidity","wind_speed","precip"]].dropna()
-    if use.empty:
+def _coerce_datetime(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure datetime is parsed and tz-naive (UTC-normalized then strip tz)."""
+    if "datetime" in df.columns:
+        df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce")
+        # If tz-aware, normalize to UTC then drop tz to keep joiners happy
+        try:
+            if getattr(df["datetime"].dt, "tz", None) is not None:
+                df["datetime"] = df["datetime"].dt.tz_convert("UTC").dt.tz_localize(None)
+        except Exception:
+            try:
+                df["datetime"] = df["datetime"].dt.tz_localize(None)
+            except Exception:
+                pass
+    return df
+
+
+def _coerce_numeric(df: pd.DataFrame) -> pd.DataFrame:
+    """Force numeric for pollutants/weather & AQI, non-numeric -> NaN."""
+    for c in [
+        "pm2_5", "pm10", "no2", "o3", "so2", "co",
+        "temp", "humidity", "wind_speed", "precip", "aqi"
+    ]:
+        if c in df.columns:
+            # try soft first
+            df[c] = pd.to_numeric(df[c], errors="ignore")
+            # if still object, hard-coerce
+            if df[c].dtype == "object":
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+
+def build_daily(df: pd.DataFrame) -> pd.DataFrame:
+    """Daily means of all numeric columns."""
+    if df.empty or "datetime" not in df.columns:
         return pd.DataFrame()
-    # discretize to 3 bins each
-    binned = use.apply(lambda s: pd.qcut(s, 3, labels=False, duplicates="drop"))
-    # one-hot encode bins
-    ohe = pd.get_dummies(binned.astype(int), prefix=binned.columns, columns=binned.columns)
-    freq = apriori(ohe, min_support=0.1, use_colnames=True)
+    df = _coerce_datetime(df).sort_values("datetime").set_index("datetime")
+    num = df.select_dtypes(include=[np.number])
+    if num.empty:
+        return pd.DataFrame()
+    daily = num.resample("D").mean(numeric_only=True)
+    daily = daily.dropna(how="all").reset_index()
+    return daily
+
+
+def run_clustering(daily: pd.DataFrame, clusters: int = 3) -> pd.DataFrame:
+    """
+    KMeans on available pollutant+weather columns; labels only for rows with all features present.
+    """
+    from sklearn.cluster import KMeans
+
+    if daily.empty:
+        return daily.assign(cluster=np.nan)
+
+    feat_cols = [
+        c for c in [
+            "pm2_5", "pm10", "no2", "o3", "so2", "co",
+            "temp", "humidity", "wind_speed", "precip", "aqi"
+        ] if c in daily.columns
+    ]
+    if not feat_cols:
+        return daily.assign(cluster=np.nan)
+
+    X = daily[feat_cols].copy()
+    mask = X.notna().all(axis=1)
+    X_use = X[mask]
+    if len(X_use) < 2:
+        out = daily.copy()
+        out["cluster"] = np.nan
+        return out
+
+    k = max(1, min(clusters, len(X_use)))
+    km = KMeans(n_clusters=k, n_init=10, random_state=42)
+    labels = km.fit_predict(X_use.to_numpy())
+
+    out = daily.copy()
+    out["cluster"] = np.nan
+    out.loc[mask, "cluster"] = labels
+    return out
+
+
+def mine_associations(daily: pd.DataFrame) -> pd.DataFrame:
+    """
+    Association mining between discretized weather/pollutants:
+    - Discretize into terciles (low/med/high) using qcut (duplicates drop)
+    - One-hot encode ternary items; run apriori + association_rules
+    """
+    try:
+        from mlxtend.frequent_patterns import apriori, association_rules
+    except Exception:
+        return pd.DataFrame(columns=["antecedents", "consequents", "support", "confidence", "lift"])
+
+    if daily.empty:
+        return pd.DataFrame(columns=["antecedents", "consequents", "support", "confidence", "lift"])
+
+    cols = [c for c in ["pm2_5", "pm10", "no2", "o3", "so2", "co", "temp", "humidity", "wind_speed", "precip"]
+            if c in daily.columns]
+    if not cols:
+        return pd.DataFrame(columns=["antecedents", "consequents", "support", "confidence", "lift"])
+
+    df = daily[cols].dropna()
+    if df.empty:
+        return pd.DataFrame(columns=["antecedents", "consequents", "support", "confidence", "lift"])
+
+    # discretize to terciles and one-hot encode as boolean “items”
+    items = {}
+    for c in df.columns:
+        try:
+            q = pd.qcut(df[c], 3, labels=["low", "med", "high"], duplicates="drop")
+        except Exception:
+            q = pd.Series(["med"] * len(df), index=df.index)
+        for lev in pd.unique(q):
+            if pd.isna(lev):
+                continue
+            items[f"{c}={lev}"] = (q == lev)
+
+    trans = pd.DataFrame(items).fillna(False)
+    if trans.sum().sum() == 0:
+        return pd.DataFrame(columns=["antecedents", "consequents", "support", "confidence", "lift"])
+
+    freq = apriori(trans, min_support=0.2, use_colnames=True)
     if freq.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=["antecedents", "consequents", "support", "confidence", "lift"])
+
     rules = association_rules(freq, metric="lift", min_threshold=1.0)
-    rules = rules.sort_values("lift", ascending=False)
-    return rules
+    if rules.empty:
+        return pd.DataFrame(columns=["antecedents", "consequents", "support", "confidence", "lift"])
+
+    out = rules[["antecedents", "consequents", "support", "confidence", "lift"]].copy()
+    out["antecedents"] = out["antecedents"].apply(lambda s: ", ".join(sorted(list(s))))
+    out["consequents"] = out["consequents"].apply(lambda s: ", ".join(sorted(list(s))))
+    out.sort_values(["lift", "confidence", "support"], ascending=False, inplace=True)
+    return out.reset_index(drop=True)
+
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--input-file", required=True)
-    ap.add_argument("--city", required=True)
-    ap.add_argument("--outdir", default="reports")
-    ap.add_argument("--clusters", type=int, default=3)
+    ap = argparse.ArgumentParser(description="Pattern discovery: daily seasonality, clustering, association rules")
+    ap.add_argument("--input-file", required=True, help="Processed features CSV with datetime + pollutants + weather")
+    ap.add_argument("--outdir", default="reports", help="Directory to write outputs")
+    ap.add_argument("--city", default="City", help="City name (for filenames)")
+    ap.add_argument("--clusters", type=int, default=3, help="KMeans cluster count (capped to valid rows)")
     args = ap.parse_args()
 
-    Path(args.outdir).mkdir(parents=True, exist_ok=True)
+    outdir = Path(args.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
+    slug = _slugify(args.city)
 
-    df = pd.read_csv(args.input_file, parse_dates=["datetime"]).sort_values("datetime")
-    daily = seasonal_trends(df)
+    df = pd.read_csv(args.input_file, parse_dates=["datetime"])
+    df = _coerce_numeric(df)
 
-    # clustering on daily pollutant+weather means
-    feat = [c for c in ["pm2_5","pm10","no2","o3","so2","co","temp","humidity","wind_speed","precip"] if c in daily]
-    labels, sil, km = do_clustering(daily, feat, k=args.clusters)
-    if labels is not None:
-        daily["cluster"] = labels
+    daily = build_daily(df)
+    daily = run_clustering(daily, clusters=args.clusters)
 
-    # association rules
-    rules = mine_rules(df)
-
-    # save artifacts
-    daily_path = Path(args.outdir) / f"seasonal_{args.city.lower().replace(' ','_')}.csv"
+    daily_path = outdir / f"seasonal_{slug}.csv"
     daily.to_csv(daily_path, index=False)
 
-    rules_path = Path(args.outdir) / f"assoc_rules_{args.city.lower().replace(' ','_')}.csv"
+    rules = mine_associations(daily)
+    rules_path = outdir / f"assoc_rules_{slug}.csv"
     rules.to_csv(rules_path, index=False)
 
-    # short report
-    report_path = Path(args.outdir) / f"patterns_{args.city.lower().replace(' ','_')}.md"
-    with open(report_path, "w") as f:
-        f.write(f"# Pattern Discovery – {args.city}\n\n")
-        f.write(f"- Features used for clustering: {feat}\n")
-        if labels is not None:
-            f.write(f"- KMeans(k={args.clusters}) silhouette: {sil:.3f}\n")
-            cts = daily["cluster"].value_counts().to_dict()
-            f.write(f"- Cluster sizes: {cts}\n")
+    md_path = outdir / f"patterns_{slug}.md"
+    with md_path.open("w") as f:
+        f.write(f"# Pattern discovery — {args.city}\n\n")
+        f.write(f"- Daily rows: **{len(daily)}**\n")
+        if "cluster" in daily.columns and daily["cluster"].notna().any():
+            f.write(f"- Clusters present: **{int(pd.Series(daily['cluster'].dropna()).nunique())}**\n")
         else:
-            f.write("- Clustering skipped (insufficient data).\n")
-        f.write(f"- Association rules saved: {rules_path.name} (rows={len(rules)})\n")
+            f.write("- Clusters present: *(not enough complete rows to compute)*\n")
+        f.write(f"- Association rules: **{len(rules)}**\n")
+        if not rules.empty:
+            f.write("\nTop 5 rules by lift:\n\n")
+            for _, r in rules.head(5).iterrows():
+                f.write(
+                    f"- **{r['antecedents']} ⇒ {r['consequents']}** "
+                    f"(support {r['support']:.2f}, conf {r['confidence']:.2f}, lift {r['lift']:.2f})\n"
+                )
 
-    print(f"✅ Saved: {daily_path}, {rules_path}, {report_path}")
+    print(f"✅ Saved: {daily_path}, {rules_path}, {md_path}")
+
 
 if __name__ == "__main__":
     main()
