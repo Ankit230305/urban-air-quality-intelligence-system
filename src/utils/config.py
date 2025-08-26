@@ -21,9 +21,7 @@ import os
 from dataclasses import dataclass
 from typing import Optional
 
-from dotenv import load_dotenv, find_dotenv
-
-
+from dotenv import load_dotenv
 @dataclass
 class Config:
     """Dataclass for storing configuration values.
