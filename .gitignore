@@ -68,3 +68,5 @@ data/warehouse/
 models/
 .env
 urban-air-quality-intelligence-system/
+data/
+reports/

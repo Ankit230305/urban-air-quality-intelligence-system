@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 POLLUTANT_COLS = ["pm2_5", "pm10", "o3", "no2", "so2", "co"]
-WEATHER_COLS   = ["temp", "humidity", "wind_speed", "precip"]
+WEATHER_COLS = ["temp", "humidity", "wind_speed", "precip"]
 
 
 def aqi_category(aqi: float) -> str | float:
@@ -84,7 +84,7 @@ def merge_and_feature_engineer(
 
     # --- choose columns and resample ---
     pollutant_columns = [c for c in POLLUTANT_COLS if c in p_df.columns]
-    keep_loc_cols     = [c for c in ["latitude", "longitude"] if c in p_df.columns]
+    keep_loc_cols = [c for c in ["latitude", "longitude"] if c in p_df.columns]
 
     pollutant_resampled = p_df[
         [c for c in pollutant_columns + keep_loc_cols if c in p_df.columns]

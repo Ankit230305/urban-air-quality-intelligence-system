@@ -1,6 +1,6 @@
 import argparse
-from pathlib import Path
 import pandas as pd
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -31,12 +31,13 @@ def main():
         return
 
     # broadcast demographics across all rows
-    for c in ["population","pop_density_per_km2","pct_elderly","pct_children","respiratory_illness_rate_per_100k"]:
+    for c in ["population", "pop_density_per_km2", "pct_elderly", "pct_children", "respiratory_illness_rate_per_100k"]:
         if c in d.columns:
             f[c] = row.get(c)
 
     f.to_csv(args.output, index=False)
     print(f"✅ wrote {args.output} with demographics columns")
+
 
 if __name__ == "__main__":
     main()

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-import json, subprocess, os
+import json
+import subprocess
 from datetime import date
 from pathlib import Path
 
@@ -24,8 +25,10 @@ CITIES = {
     "Vellore": (12.9165, 79.1325),
 }
 
+
 def slug_of(city: str) -> str:
     return city.lower().replace(" ", "_")
+
 
 def find_first_existing(paths):
     for p in paths:
@@ -33,20 +36,24 @@ def find_first_existing(paths):
             return Path(p)
     return None
 
+
 def find_processed_for_city(slug: str):
     return find_first_existing([
         f"data/processed/{slug}__features_plus_demo.csv",
         f"data/processed/{slug}_features_plus_demo.csv",
     ])
 
+
 def find_patterns_for_city(slug: str):
     daily = find_first_existing([f"reports/seasonal_{slug}.csv"])
     rules = find_first_existing([f"reports/assoc_rules_{slug}.csv"])
-    md    = find_first_existing([f"reports/patterns_{slug}.md"])
+    md = find_first_existing([f"reports/patterns_{slug}.md"])
     return daily, rules, md
+
 
 def find_metrics_for_city(slug: str):
     return find_first_existing([f"models/supervised_metrics_{slug}.json"])
+
 
 def find_forecast_for_city(slug: str):
     return find_first_existing([
@@ -54,17 +61,20 @@ def find_forecast_for_city(slug: str):
         "models/forecast_pm25.csv",
     ])
 
+
 def find_anomalies_for_city(slug: str):
     return find_first_existing([
         f"data/processed/{slug}__anomalies.csv",
         f"data/processed/{slug}_anomalies.csv",
     ])
 
+
 def find_health_for_city(slug: str):
     return find_first_existing([
         f"data/processed/{slug}__health.csv",
         f"data/processed/{slug}_health.csv",
     ])
+
 
 def load_csv_safe(path, parse_dates=None) -> pd.DataFrame:
     if not path:
@@ -75,6 +85,7 @@ def load_csv_safe(path, parse_dates=None) -> pd.DataFrame:
         st.warning(f"Could not load {path}: {e}")
         return pd.DataFrame()
 
+
 def as_numeric(df: pd.DataFrame, cols):
     if df.empty:
         return df
@@ -83,9 +94,11 @@ def as_numeric(df: pd.DataFrame, cols):
             df[c] = pd.to_numeric(df[c], errors="coerce")
     return df
 
+
 def kpi_card(col, label, value, suffix=""):
     with col:
         st.metric(label, f"{value}{suffix}")
+
 
 # -----------------------
 # Sidebar Controls
@@ -142,21 +155,21 @@ tabs = st.tabs(["Overview", "EDA", "Pattern Discovery", "Models", "Forecast", "A
 # -----------------------
 with tabs[0]:
     df = load_csv_safe(files["processed"], parse_dates=["datetime"])
-    df = as_numeric(df, ["pm2_5","pm10","no2","o3","so2","co","aqi","temp","humidity","wind_speed","precip"])
+    df = as_numeric(df, ["pm2_5", "pm10", "no2", "o3", "so2", "co", "aqi", "temp", "humidity", "wind_speed", "precip"])
 
     if df.empty:
         st.info("No processed dataset found for this city yet. Click **Build / Refresh city data**.")
     else:
-        latest = df.dropna(subset=["pm2_5","pm10","aqi"], how="all").tail(1)
+        latest = df.dropna(subset=["pm2_5", "pm10", "aqi"], how="all").tail(1)
         c1, c2, c3, c4 = st.columns(4)
         if not latest.empty:
             kpi_card(c1, "PM2.5 (latest)", round(float(latest["pm2_5"].iloc[0]), 2) if pd.notna(latest["pm2_5"].iloc[0]) else "NA", " µg/m³")
-            kpi_card(c2, "PM10 (latest)",  round(float(latest["pm10"].iloc[0]), 2)  if pd.notna(latest["pm10"].iloc[0])  else "NA", " µg/m³")
-            kpi_card(c3, "AQI (latest)",   round(float(latest["aqi"].iloc[0]), 2)   if pd.notna(latest["aqi"].iloc[0])   else "NA")
+            kpi_card(c2, "PM10 (latest)", round(float(latest["pm10"].iloc[0]), 2) if pd.notna(latest["pm10"].iloc[0]) else "NA", " µg/m³")
+            kpi_card(c3, "AQI (latest)", round(float(latest["aqi"].iloc[0]), 2) if pd.notna(latest["aqi"].iloc[0]) else "NA")
             kpi_card(c4, "Rows", f"{len(df):,}")
 
         st.markdown("#### Hourly Pollution Trend")
-        ycols = [c for c in ["pm2_5","pm10","no2","o3","so2","co"] if c in df.columns]
+        ycols = [c for c in ["pm2_5", "pm10", "no2", "o3", "so2", "co"] if c in df.columns]
         if ycols:
             fig = px.line(df, x="datetime", y=ycols)
             st.plotly_chart(fig, use_container_width=True)
@@ -169,7 +182,7 @@ with tabs[0]:
 with tabs[1]:
     st.markdown("### Exploratory Data Analysis")
     df = load_csv_safe(files["processed"], parse_dates=["datetime"])
-    df = as_numeric(df, ["pm2_5","pm10","no2","o3","so2","co","aqi","temp","humidity","wind_speed","precip"])
+    df = as_numeric(df, ["pm2_5", "pm10", "no2", "o3", "so2", "co", "aqi", "temp", "humidity", "wind_speed", "precip"])
 
     if df.empty:
         st.info("No processed data to analyze.")
@@ -178,7 +191,7 @@ with tabs[1]:
         st.dataframe(df.tail(50), use_container_width=True)
 
         st.markdown("#### Correlation Heatmap")
-        eda_cols = [c for c in ["pm2_5","pm10","no2","o3","so2","co","temp","humidity","wind_speed","precip","aqi"] if c in df.columns]
+        eda_cols = [c for c in ["pm2_5", "pm10", "no2", "o3", "so2", "co", "temp", "humidity", "wind_speed", "precip", "aqi"] if c in df.columns]
         if len(eda_cols) >= 2:
             corr = df[eda_cols].corr(numeric_only=True)
             st.plotly_chart(px.imshow(corr, text_auto=True), use_container_width=True)
@@ -235,12 +248,12 @@ with tabs[3]:
 
         if reg:
             st.subheader("Regression (PM2.5)")
-            reg_df = pd.DataFrame(reg).T.reset_index().rename(columns={"index":"Model"})
+            reg_df = pd.DataFrame(reg).T.reset_index().rename(columns={"index": "Model"})
             st.dataframe(reg_df, use_container_width=True)
 
         if clf:
             st.subheader("Classification (AQI category)")
-            clf_df = pd.DataFrame(clf).T.reset_index().rename(columns={"index":"Model"})
+            clf_df = pd.DataFrame(clf).T.reset_index().rename(columns={"index": "Model"})
             st.dataframe(clf_df, use_container_width=True)
 
 # -----------------------
@@ -257,12 +270,12 @@ with tabs[4]:
     else:
         # Normalize columns
         if "ds" in fdf.columns:
-            fdf = fdf.rename(columns={"ds":"datetime"})
+            fdf = fdf.rename(columns={"ds": "datetime"})
         ycols = []
         if "yhat" in fdf.columns:
             ycols = ["yhat"]
             if "yhat_lower" in fdf.columns and "yhat_upper" in fdf.columns:
-                st.area_chart(fdf.set_index("datetime")[["yhat_lower","yhat_upper"]])
+                st.area_chart(fdf.set_index("datetime")[["yhat_lower", "yhat_upper"]])
         elif "pm2_5" in fdf.columns:
             ycols = ["pm2_5"]
         else:

@@ -9,12 +9,15 @@ from dotenv import load_dotenv, find_dotenv
 # Load .env from project root
 load_dotenv(find_dotenv(usecwd=True), override=True)
 
+
 def _req_json(url: str, params: Dict[str, Any] | None = None, headers: Dict[str, str] | None = None, timeout: int = 60) -> Dict[str, Any]:
     r = requests.get(url, params=params or {}, headers=headers or {}, timeout=timeout)
     r.raise_for_status()
     return r.json()
 
 # ---------------- OpenWeatherMap ----------------
+
+
 def fetch_openweathermap_air_pollution(lat: float, lon: float, start: str, end: str, api_key: Optional[str] = None, **kwargs) -> pd.DataFrame:
     key = api_key or os.getenv("OPENWEATHERMAP_API_KEY")
     if not key:
@@ -48,6 +51,8 @@ def fetch_openweathermap_air_pollution(lat: float, lon: float, start: str, end: 
     return pd.DataFrame(rows)
 
 # ---------------- OpenAQ v3 ----------------
+
+
 def fetch_openaq_v3(
     lat: Optional[float] = None,
     lon: Optional[float] = None,
@@ -158,11 +163,14 @@ def fetch_openaq_v3(
         piv["longitude"] = lon0
     return piv
 
+
 def fetch_openaq_v3_measurements(*args, **kwargs):
     """Backward-compatible alias."""
     return fetch_openaq_v3(*args, **kwargs)
 
 # ---------------- PurpleAir ----------------
+
+
 def fetch_purpleair_sensors(lat: float, lon: float, *args, radius_m: int = 10000, token: Optional[str] = None, **kwargs) -> pd.DataFrame:
     """
     Query PurpleAir v1 sensors in a bounding box around (lat, lon).
@@ -212,6 +220,8 @@ def fetch_purpleair_sensors(lat: float, lon: float, *args, radius_m: int = 10000
     return pd.DataFrame(rows)
 
 # ---------------- WAQI ----------------
+
+
 def fetch_waqi_city(city: str, token: Optional[str] = None, **kwargs) -> pd.DataFrame:
     key = token or os.getenv("WAQI_API_KEY")
     if not key:
@@ -232,11 +242,14 @@ def fetch_waqi_city(city: str, token: Optional[str] = None, **kwargs) -> pd.Data
             pass
     return pd.DataFrame([row])
 
+
 def fetch_waqi_current(city: str, token: Optional[str] = None, **kwargs):
     """Backward-compatible alias."""
     return fetch_waqi_city(city, token=token, **kwargs)
 
 # ---------------- Visual Crossing ----------------
+
+
 def fetch_visualcrossing_weather(lat: float, lon: float, start: str, end: str, key: Optional[str] = None, **kwargs) -> pd.DataFrame:
     api = key or os.getenv("VISUAL_CROSSING_API_KEY")
     if not api:

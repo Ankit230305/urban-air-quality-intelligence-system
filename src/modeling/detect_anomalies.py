@@ -3,7 +3,8 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 
-POLLUTANTS = ["pm2_5","pm10","no2","o3","so2","co"]
+POLLUTANTS = ["pm2_5", "pm10", "no2", "o3", "so2", "co"]
+
 
 def parse_args():
     ap = argparse.ArgumentParser(description="Detect pollution spikes via rolling z-score")
@@ -13,6 +14,7 @@ def parse_args():
     ap.add_argument("--window", type=int, default=24, help="Rolling window length (hours)")
     ap.add_argument("--z-thresh", type=float, default=3.0, help="Z-score threshold for anomaly")
     return ap.parse_args()
+
 
 def main():
     args = parse_args()
@@ -27,7 +29,7 @@ def main():
             pass
 
     # coerce numerics
-    for c in POLLUTANTS + ["temp","humidity","wind_speed","precip","aqi","latitude","longitude"]:
+    for c in POLLUTANTS + ["temp", "humidity", "wind_speed", "precip", "aqi", "latitude", "longitude"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
@@ -46,7 +48,7 @@ def main():
     # rolling mean/std (centered)
     window = max(3, int(args.window))
     roll_mean = df[target].rolling(window=window, min_periods=1, center=True).mean()
-    roll_std  = df[target].rolling(window=window, min_periods=1, center=True).std(ddof=0).replace(0, np.nan)
+    roll_std = df[target].rolling(window=window, min_periods=1, center=True).std(ddof=0).replace(0, np.nan)
 
     z = (df[target] - roll_mean) / roll_std
     z = z.fillna(0.0)
@@ -61,6 +63,7 @@ def main():
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(args.output, index=False)
     print(f"✅ anomalies saved: {args.output} (rows={len(out)})")
+
 
 if __name__ == "__main__":
     main()
