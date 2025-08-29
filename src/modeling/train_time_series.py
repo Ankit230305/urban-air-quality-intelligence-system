@@ -4,7 +4,6 @@ from pathlib import Path
 import pandas as pd
 from prophet import Prophet
 
-
 def make_naive(series: pd.Series) -> pd.Series:
     s = pd.to_datetime(series, errors="coerce")
     try:

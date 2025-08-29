@@ -7,74 +7,74 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import (
-    GradientBoostingRegressor,
-    HistGradientBoostingRegressor,
-    RandomForestClassifier,
-    RandomForestRegressor,
+GradientBoostingRegressor,
+HistGradientBoostingRegressor,
+RandomForestClassifier,
+RandomForestRegressor,
 )
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
-    accuracy_score,
-    confusion_matrix,
-    f1_score,
-    mean_absolute_error,
-    mean_squared_error,
-    r2_score,
+accuracy_score,
+confusion_matrix,
+f1_score,
+mean_absolute_error,
+mean_squared_error,
+r2_score,
 )
 
 
 def _save_metrics(metrics: dict, city: str) -> None:
-    """Persist supervised model metrics next to models/."""
-    slug = (city or "").lower().replace(" ", "_")
-    out = Path("models") / (
-        f"supervised_metrics_{slug}.json" if slug else "supervised_metrics.json"
+"""Persist supervised model metrics next to models/."""
+slug = (city or "").lower().replace(" ", "_")
+out = Path("models") / (
+f"supervised_metrics_{slug}.json" if slug else "supervised_metrics.json"
     )
-    out.parent.mkdir(parents=True, exist_ok=True)
-    with out.open("w") as f:
-        json.dump(metrics, f, indent=2)
+out.parent.mkdir(parents=True, exist_ok=True)
+with out.open("w") as f:
+json.dump(metrics, f, indent=2)
 
 
 GradientBoostingRegressor,
-    HistGradientBoostingRegressor,
-    RandomForestClassifier,
-    RandomForestRegressor,
+HistGradientBoostingRegressor,
+RandomForestClassifier,
+RandomForestRegressor,
 )
-    accuracy_score,
-    confusion_matrix,
-    f1_score,
-    mean_absolute_error,
-    mean_squared_error,
-    r2_score,
+accuracy_score,
+confusion_matrix,
+f1_score,
+mean_absolute_error,
+mean_squared_error,
+r2_score,
 )
 
 def _save_metrics(metrics: dict, city: str) -> None:
-    """Persist supervised model metrics next to models/."""
-    slug = (city or "").lower().replace(" ", "_")
-    out = Path("models") / (
-        f"supervised_metrics_{slug}.json" if slug else "supervised_metrics.json"
+"""Persist supervised model metrics next to models/."""
+slug = (city or "").lower().replace(" ", "_")
+out = Path("models") / (
+f"supervised_metrics_{slug}.json" if slug else "supervised_metrics.json"
     )
-    out.parent.mkdir(parents=True, exist_ok=True)
-    with out.open("w") as f:
-        json.dump(metrics, f, indent=2)
+out.parent.mkdir(parents=True, exist_ok=True)
+with out.open("w") as f:
+json.dump(metrics, f, indent=2)
 
 lug = (city or "").lower().replace(" ", "_")
-    out = Path("models") / (f"supervised_metrics_{slug}.json" if slug else "supervised_metrics.json")
-    out.parent.mkdir(parents=True, exist_ok=True)
-    with out.open("w") as f:
-        json.dump(metrics, f, indent=2)
+out = Path("models") / (f"supervised_metrics_{slug}.json" if slug else "supervised_metrics.json")
+out.parent.mkdir(parents=True, exist_ok=True)
+with out.open("w") as f:
+json.dump(metrics, f, indent=2)
 
-    GradientBoostingRegressor,
-    HistGradientBoostingRegressor,
-    RandomForestClassifier,
-    RandomForestRegressor,
+GradientBoostingRegressor,
+HistGradientBoostingRegressor,
+RandomForestClassifier,
+RandomForestRegressor,
 )
 
-    accuracy_score,
-    confusion_matrix,
-    f1_score,
-    mean_absolute_error,
-    mean_squared_error,
-    r2_score,
+accuracy_score,
+confusion_matrix,
+f1_score,
+mean_absolute_error,
+mean_squared_error,
+r2_score,
 )
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -84,38 +84,38 @@ POLLUTANTS = ["pm2_5", "pm10", "no2", "o3", "so2", "co"]
 WEATHER = ["temp", "humidity", "wind_speed", "precip"]
 
 def slug_of(city: str) -> str:
-    return "".join(ch if ch.isalnum() else "_" for ch in city.lower())
+return "".join(ch if ch.isalnum() else "_" for ch in city.lower())
 
 def aqi_category(pm25: float) -> str:
-    if pm25 < 51:
-        return "Good"
-    if pm25 < 101:
-        return "Moderate"
-    if pm25 < 201:
-        return "Unhealthy"
-    if pm25 < 301:
-        return "Very Unhealthy"
-    return "Hazardous"
+if pm25 < 51:
+return "Good"
+if pm25 < 101:
+return "Moderate"
+if pm25 < 201:
+return "Unhealthy"
+if pm25 < 301:
+return "Very Unhealthy"
+return "Hazardous"
 
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy().sort_values("datetime")
-    # coerce numeric
-    for c in POLLUTANTS + WEATHER + ["aqi", "latitude", "longitude"]:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-    # time features
-    if "datetime" in df.columns:
-        df["hour"] = df["datetime"].dt.hour
-        df["dow"] = df["datetime"].dt.dayofweek
-    else:
-        df["hour"] = 0
-        df["dow"] = 0
-    # lags/rolls
-    if "pm2_5" in df.columns:
-        df["pm2_5_lag1"] = df["pm2_5"].shift(1)
-        df["pm2_5_lag3"] = df["pm2_5"].shift(3)
-        df["pm2_5_roll6h"] = df["pm2_5"].rolling(6, min_periods=1).mean()
-    return df
+df = df.copy().sort_values("datetime")
+# coerce numeric
+for c in POLLUTANTS + WEATHER + ["aqi", "latitude", "longitude"]:
+if c in df.columns:
+df[c] = pd.to_numeric(df[c], errors="coerce")
+# time features
+if "datetime" in df.columns:
+df["hour"] = df["datetime"].dt.hour
+df["dow"] = df["datetime"].dt.dayofweek
+else:
+df["hour"] = 0
+df["dow"] = 0
+# lags/rolls
+if "pm2_5" in df.columns:
+df["pm2_5_lag1"] = df["pm2_5"].shift(1)
+df["pm2_5_lag3"] = df["pm2_5"].shift(3)
+df["pm2_5_roll6h"] = df["pm2_5"].rolling(6, min_periods=1).mean()
+return df
 
 def safe_feature_list(df: pd.DataFrame, target: str) -> list:
     base = ["hour", "dow", "temp", "humidity", "wind_speed", "precip", "pm2_5_lag1", "pm2_5_roll6h"]
