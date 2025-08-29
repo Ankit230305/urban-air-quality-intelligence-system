@@ -26,21 +26,26 @@ from sklearn.metrics import (
 def _save_metrics(metrics: dict, city: str) -> None:
     """Persist supervised model metrics next to models/."""
     slug = (city or "").lower().replace(" ", "_")
-    out = Path("models") / (f"supervised_metrics_{slug}.json" if slug else "supervised_metrics.json")
+    out = Path("models") / (
+        f"supervised_metrics_{slug}.json" if slug else "supervised_metrics.json"
+    )
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w") as f:
         json.dump(metrics, f, indent=2)
 
 
-import joblib
-from sklearn.ensemble import (
+lug = (city or "").lower().replace(" ", "_")
+    out = Path("models") / (f"supervised_metrics_{slug}.json" if slug else "supervised_metrics.json")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w") as f:
+        json.dump(metrics, f, indent=2)
+
     GradientBoostingRegressor,
     HistGradientBoostingRegressor,
     RandomForestClassifier,
     RandomForestRegressor,
 )
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (
+
     accuracy_score,
     confusion_matrix,
     f1_score,
@@ -55,10 +60,8 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 POLLUTANTS = ["pm2_5", "pm10", "no2", "o3", "so2", "co"]
 WEATHER = ["temp", "humidity", "wind_speed", "precip"]
 
-
 def slug_of(city: str) -> str:
     return "".join(ch if ch.isalnum() else "_" for ch in city.lower())
-
 
 def aqi_category(pm25: float) -> str:
     if pm25 < 51:
@@ -70,7 +73,6 @@ def aqi_category(pm25: float) -> str:
     if pm25 < 301:
         return "Very Unhealthy"
     return "Hazardous"
-
 
 def build_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy().sort_values("datetime")
@@ -92,7 +94,6 @@ def build_features(df: pd.DataFrame) -> pd.DataFrame:
         df["pm2_5_roll6h"] = df["pm2_5"].rolling(6, min_periods=1).mean()
     return df
 
-
 def safe_feature_list(df: pd.DataFrame, target: str) -> list:
     base = ["hour", "dow", "temp", "humidity", "wind_speed", "precip", "pm2_5_lag1", "pm2_5_roll6h"]
     feats = [c for c in base + POLLUTANTS if (c in df.columns and c != target)]
@@ -109,14 +110,12 @@ def safe_feature_list(df: pd.DataFrame, target: str) -> list:
             out.append(c)
     return out
 
-
 def numeric_only(df: pd.DataFrame, cols: list) -> pd.DataFrame:
     X = df[cols].copy()
     for c in X.columns:
         X[c] = pd.to_numeric(X[c], errors="coerce")
     keep = [c for c in X.columns if np.issubdtype(X[c].dtype, np.number)]
     return X[keep]
-
 
 def fill_and_prune(X: pd.DataFrame) -> pd.DataFrame:
     """Fill medians; drop columns that remain all-NaN (e.g., no data at all)."""
@@ -132,7 +131,6 @@ def fill_and_prune(X: pd.DataFrame) -> pd.DataFrame:
         X = X.drop(columns=const_cols)
     return X
 
-
 def split_time_ordered(X: pd.DataFrame, y: pd.Series, min_test: int = 1):
     n = len(X)
     if n <= min_test:
@@ -140,7 +138,6 @@ def split_time_ordered(X: pd.DataFrame, y: pd.Series, min_test: int = 1):
     test_size = max(int(round(n * 0.2)), min_test)
     split_idx = n - test_size
     return X.iloc[:split_idx], X.iloc[split_idx:], y.iloc[:split_idx], y.iloc[split_idx:]
-
 
 def main():
     ap = argparse.ArgumentParser()
@@ -315,10 +312,8 @@ def main():
     (outdir / f"supervised_metrics_{city_slug}.json").write_text(json.dumps(metrics, indent=2))
     _save_metrics(metrics, args.city)  # , indent=2))
 
-
 if __name__ == "__main__":
     main()
-
 
 def _save_metrics(metrics: dict, city: str) -> None:
     from pathlib import Path, json
