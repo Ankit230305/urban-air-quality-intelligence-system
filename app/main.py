@@ -9,6 +9,7 @@ import streamlit as st
 import plotly.express as px
 
 from src.utils.live_fetch import fetch_live_point, livepoint_to_df
+from src.utils.paths import resolve_processed, resolve_forecast_path
 from src.utils.clean import coerce_none_like, fill_missing_for_display
 
 st.set_page_config(page_title="Urban AQI", page_icon="🌆", layout="wide")
@@ -90,28 +91,6 @@ tabs = st.tabs(["Overview", "EDA", "Patterns", "Forecasts", "Anomalies",
 slug = city.lower().replace(" ", "_")
 paths = {
 
-def _resolve_processed(paths_dict, city):
-    """Return a DataFrame using the best available processed file."""
-    import pandas as pd
-    from src.utils.clean import coerce_none_like
-    from pathlib import Path
-    slug = city.lower().replace(" ", "_")
-    # 1) preferred: *_features_plus_demo.csv
-    p1 = Path("data/processed") / f"{slug}_features_plus_demo.csv"
-    # 2) fallback: *__features.csv
-    p2 = Path("data/processed") / f"{slug}__features.csv"
-    # 3) legacy naming?
-    p3 = Path("data/processed") / f"{slug}_features.csv"
-    for cand in (p1, p2, p3):
-        if cand.exists():
-            try:
-                df = pd.read_csv(cand, parse_dates=["datetime"])
-                return coerce_none_like(df)
-            except Exception:
-                pass
-    return None
-
-def _resolve_forecast_path(slug):
     """Prefer city-specific forecast; fallback to generic forecast_pm25.csv."""
     from pathlib import Path
     p_city = Path("models") / f"forecast_pm25_{slug}.csv"
@@ -131,7 +110,7 @@ def _resolve_forecast_path(slug):
 # ---------------------------- Overview ----------------------------
 with tabs[0]:
     st.subheader("Overview")
-    fdf = _resolve_processed(paths, city)
+    fdf = resolve_processed(city)
     if fdf is None or fdf.empty:
         st.warning("No processed file found. Showing sample data for demo.")
         fdf = synthetic_processed(city)
@@ -161,7 +140,7 @@ with tabs[0]:
 # ---------------------------- EDA ----------------------------
 with tabs[1]:
     st.subheader("EDA")
-    df = _resolve_processed(paths, city)
+    df = resolve_processed(city)
     used_synth = False
     if df is None or df.empty:
         st.info("Sample data shown (run pipeline to see real data).")
