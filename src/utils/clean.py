@@ -67,3 +67,42 @@ def has_enough_points(df: pd.DataFrame, cols: list[str], min_points: int = 10) -
     if not subset:
         return False
     return df[subset].dropna().shape[0] >= min_points
+
+def drop_mostly_empty_columns(df: pd.DataFrame, thresh: float = 0.95, keep: list[str] | None = None) -> pd.DataFrame:
+    """Drop columns where fraction of NaN/empty >= thresh. Keep any in `keep`."""
+    if df is None or df.empty:
+        return df
+    tmp = df.replace({"None": np.nan, "": np.nan})
+    frac_nan = tmp.isna().mean()
+    keep = keep or []
+    cols = [c for c in tmp.columns if (frac_nan[c] < thresh) or (c in keep)]
+    return tmp[cols]
+
+def recent_nonnull_window(df: pd.DataFrame, ycol: str, xcol: str = "datetime", days: int = 14) -> pd.DataFrame:
+    """Return the last `days` of rows where ycol has data; falls back to all."""
+    if df is None or df.empty or ycol not in df or xcol not in df:
+        return df
+    dff = df.dropna(subset=[ycol]).copy()
+    if dff.empty:
+        return df
+    cutoff = pd.to_datetime(dff[xcol]).max() - pd.Timedelta(days=days)
+    return df[pd.to_datetime(df[xcol]) >= cutoff].copy()
+
+def backfill_pm_from_forecast(proc_df: pd.DataFrame, fcst_df: pd.DataFrame, pm_col: str = "pm2_5") -> pd.DataFrame:
+    """If `pm_col` has many NaNs, fill missing using forecast `yhat` on nearest hour."""
+    if proc_df is None or proc_df.empty or fcst_df is None or fcst_df.empty:
+        return proc_df
+    if "datetime" not in proc_df or "ds" not in fcst_df or "yhat" not in fcst_df:
+        return proc_df
+    out = proc_df.copy()
+    out["__dt_hour"] = pd.to_datetime(out["datetime"]).dt.floor("h")
+    f = fcst_df.copy()
+    f["__dt_hour"] = pd.to_datetime(f["ds"]).dt.floor("h")
+    f = f[["__dt_hour", "yhat"]].drop_duplicates("__dt_hour", keep="last")
+    out = out.merge(f, on="__dt_hour", how="left")
+    if pm_col not in out:
+        out[pm_col] = np.nan
+    need_fill = out[pm_col].isna()
+    out.loc[need_fill, pm_col] = out.loc[need_fill, "yhat"]
+    out = out.drop(columns=["__dt_hour", "yhat"])
+    return out

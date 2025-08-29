@@ -9,7 +9,7 @@ import plotly.express as px
 
 from src.utils.live_fetch import fetch_live_point, livepoint_to_df
 from src.utils.paths import resolve_processed, resolve_forecast_path
-from src.utils.clean import coerce_none_like, fill_missing_for_display, drop_empty_columns, has_enough_points
+from src.utils.clean import (coerce_none_like, fill_missing_for_display, drop_empty_columns, drop_mostly_empty_columns, has_enough_points, recent_nonnull_window, backfill_pm_from_forecast)
 
 st.set_page_config(page_title="Urban AQI", page_icon="🌆", layout="wide")
 st.title("Urban Air Quality Intelligence System")
@@ -110,6 +110,16 @@ with tabs[0]:
             "longitude",
         ],
     )
+    # Try backfilling pm2_5 from forecast if missing
+    try:
+        fpath_back = resolve_forecast_path(slug)
+        _fdf = load_csv_safe(fpath_back, parse_dates=["ds"])
+        if _fdf is not None and not _fdf.empty:
+            fdf = backfill_pm_from_forecast(fdf, _fdf, pm_col="pm2_5")
+    except Exception:
+        pass
+    # Hide mostly-empty columns
+    fdf = drop_mostly_empty_columns(fdf, thresh=0.95, keep=["datetime","latitude","longitude","aqi","pm2_5"])
 
     c1, c2, c3, c4 = st.columns(4)
     display_aqi = np.nan
@@ -173,6 +183,15 @@ with tabs[1]:
         ],
     )
     df = drop_empty_columns(df)
+    # EDA: backfill pm2_5 from forecast to avoid empty plots
+    try:
+        fpath_back = resolve_forecast_path(slug)
+        _fdf = load_csv_safe(fpath_back, parse_dates=["ds"])
+        if _fdf is not None and not _fdf.empty:
+            df = backfill_pm_from_forecast(df, _fdf, pm_col="pm2_5")
+    except Exception:
+        pass
+    df = drop_mostly_empty_columns(df, thresh=0.95)
 
     if "datetime" in df and "pm2_5" in df and has_enough_points(df, ["datetime","pm2_5"], 10):
         st.plotly_chart(
@@ -245,7 +264,14 @@ with tabs[2]:
 
     if assoc is not None and not assoc.empty:
         st.markdown("**Association rules (top)**")
-        st.dataframe(drop_empty_columns(assoc).head(2000), use_container_width=True)
+        assoc = assoc.drop_duplicates()
+        for c in ["support","confidence","lift"]:
+            if c in assoc.columns:
+                assoc[c] = pd.to_numeric(assoc[c], errors="coerce")
+        order = [c for c in ["lift","confidence","support"] if c in assoc.columns]
+        if order:
+            assoc = assoc.sort_values(order, ascending=[False, False, False])
+        st.dataframe(drop_empty_columns(assoc).head(500), use_container_width=True)
     else:
         st.info("No association rules CSV yet.")
 
@@ -273,6 +299,8 @@ with tabs[4]:
     st.subheader("Anomalies")
     adf = load_csv_safe(paths["anoms"], parse_dates=["datetime"])
     if adf is not None and not adf.empty:
+        hide = [c for c in ["temp","humidity","precip"] if c in adf.columns]
+        adf = adf.drop(columns=hide)
         st.dataframe(drop_empty_columns(adf).tail(500), use_container_width=True)
         if "score" in adf.columns:
             st.plotly_chart(px.line(adf, x="datetime", y="score", title="Anomaly scores over time"),
@@ -292,7 +320,8 @@ with tabs[5]:
             else ("risk_index" if "risk_index" in hdf.columns else "aqi")
         )
         if ycol in hdf.columns:
-            st.plotly_chart(px.line(hdf, x="datetime", y=ycol, title=f"Health metric: {ycol}"),
+            zoom = recent_nonnull_window(hdf, ycol, "datetime", days=21)
+            st.plotly_chart(px.line(zoom, x="datetime", y=ycol, title=f"Health metric: {ycol} (recent)"),
                             use_container_width=True)
         band = hdf["health_risk_band"].iloc[-1] if "health_risk_band" in hdf.columns else "Unknown"
         recs = {
