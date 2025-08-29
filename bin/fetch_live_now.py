@@ -1,79 +1,39 @@
 #!/usr/bin/env python3
-import os, sys
+
+import sys
+from pathlib import Path as _P
+sys.path.insert(0, str(_P(__file__).resolve().parents[1]))
+import argparse
 from pathlib import Path
-from datetime import datetime, timezone
-import requests
+
 import pandas as pd
 
-def slug_of(city: str) -> str:
-    return city.lower().replace(" ", "_")
+from src.utils.live_fetch import fetch_live_point, livepoint_to_df
 
-def main():
-    import argparse
-    ap = argparse.ArgumentParser()
-    ap.add_argument("city")
-    ap.add_argument("lat", type=float)
-    ap.add_argument("lon", type=float)
-    ap.add_argument("--out", default="data/processed")
-    args = ap.parse_args()
+def slug_of(name: str) -> str:
+    return name.lower().replace(" ", "_")
 
-    key = os.getenv("OPENWEATHERMAP_API_KEY")
-    if not key:
-        sys.exit("ERROR: Missing OPENWEATHERMAP_API_KEY")
+def main() -> None:
+    p = argparse.ArgumentParser()
+    p.add_argument("--city", required=True)
+    p.add_argument("--lat", type=float, required=True)
+    p.add_argument("--lon", type=float, required=True)
+    args = p.parse_args()
 
-    aq = requests.get(
-        "https://api.openweathermap.org/data/2.5/air_pollution",
-        params={"lat": args.lat, "lon": args.lon, "appid": key},
-        timeout=30,
-    ).json()
+    lp = fetch_live_point(args.city, args.lat, args.lon)
+    df_new = livepoint_to_df(lp)
 
-    wx = requests.get(
-        "https://api.openweathermap.org/data/2.5/weather",
-        params={"lat": args.lat, "lon": args.lon, "appid": key, "units": "metric"},
-        timeout=30,
-    ).json()
-
-    comp = aq["list"][0]["components"]
-    aqi = aq["list"][0]["main"]["aqi"]
-    tm = datetime.fromtimestamp(aq["list"][0]["dt"], tz=timezone.utc).replace(tzinfo=None)
-
-    row = {
-        "datetime": tm.isoformat(sep=" "),
-        "pm2_5": comp.get("pm2_5"),
-        "pm10": comp.get("pm10"),
-        "no2": comp.get("no2"),
-        "o3": comp.get("o3"),
-        "so2": comp.get("so2"),
-        "co": comp.get("co"),
-        "aqi": aqi,
-        "temp": wx["main"]["temp"],
-        "humidity": wx["main"]["humidity"],
-        "wind_speed": wx["wind"]["speed"],
-        "precip": (wx.get("rain", {}).get("1h", 0.0) or
-                   wx.get("snow", {}).get("1h", 0.0) or 0.0),
-        "city": args.city,
-    }
-    df = pd.DataFrame([row])
-
-    outdir = Path(args.out); outdir.mkdir(parents=True, exist_ok=True)
-    slug = slug_of(args.city)
-    fplus = outdir / f"{slug}__features_plus_demo.csv"
-
-    if fplus.exists():
-        existing = pd.read_csv(fplus, parse_dates=["datetime"])
-        for c in ["pm2_5","pm10","no2","o3","so2","co","aqi","temp","humidity","wind_speed","precip"]:
-            if c in df: df[c] = pd.to_numeric(df[c], errors="coerce")
-        # align to existing columns (keep any demographics cols)
-        for c in existing.columns:
-            if c not in df.columns:
-                df[c] = pd.NA
-        df = df.reindex(columns=existing.columns)
-        combined = pd.concat([existing, df], ignore_index=True)
-        combined.to_csv(fplus, index=False)
-        print(f"✅ Appended 1 live row to {fplus} (rows={len(combined)})")
+    out = Path("data/processed") / f"{slug_of(args.city)}__live.csv"
+    if out.exists():
+        df_old = pd.read_csv(out)
+        df = pd.concat([df_old, df_new], ignore_index=True)
+        df = df.drop_duplicates(subset=["datetime"], keep="last")
     else:
-        df.to_csv(fplus, index=False)
-        print(f"✅ Wrote {fplus} (rows=1)")
+        df = df_new
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(out, index=False)
+    print(f"Saved/updated: {out} (rows={len(df)})")
 
 if __name__ == "__main__":
     main()
