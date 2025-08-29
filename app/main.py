@@ -461,12 +461,12 @@ with tabs[7]:
             )
 
 def _sanitize_overview_df(df, slug):
-    \"\"\"Finalize Overview table:
+    """Finalize Overview table:
     - replace 'None' with NaN
     - backfill pm2_5 from forecast (if missing)
     - derive AQI + category from pm2_5 when missing
     - drop mostly-empty columns (keep key cols)
-    \"\"\"
+    """
     if df is None or df.empty:
         return df
     # Backfill from forecast
