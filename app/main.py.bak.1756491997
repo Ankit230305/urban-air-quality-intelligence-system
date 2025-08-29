@@ -15,7 +15,7 @@ from src.utils.clean import (
 )
 from src.utils.paths import resolve_processed, resolve_forecast_path
 
-st.set_page_config(page_title="Urban AQI", page_icon="��", layout="wide")
+st.set_page_config(page_title="Urban AQI", page_icon="🌆", layout="wide")
 st.title("Urban Air Quality Intelligence System")
 
 DATA_DIR = Path("data")
@@ -81,20 +81,6 @@ def _aqi_from_pm25(pm):
             return float(round(aqi, 1)), cat
     return 500.0, "Hazardous"
 
-def last_nonnull_window(df: pd.DataFrame, cols: list[str], window: int = 300) -> pd.DataFrame:
-    """Return a recent slice ending at the last row where ANY of `cols` is non-null."""
-    if df is None or df.empty:
-        return df
-    cols = [c for c in cols if c in df.columns]
-    if not cols:
-        return df.tail(window)
-    mask = df[cols].notna().any(axis=1)
-    if not mask.any():
-        return df.tail(window)
-    last_idx = mask[mask].index[-1]
-    start = max(0, int(last_idx) - window + 1)
-    return df.iloc[start : last_idx + 1]
-
 def _sanitize_overview_df(df: pd.DataFrame, slug: str) -> pd.DataFrame:
     """Finalize Overview table:
     - coerce None strings -> NaN
@@ -106,7 +92,7 @@ def _sanitize_overview_df(df: pd.DataFrame, slug: str) -> pd.DataFrame:
         return df
     df = coerce_none_like(df)
 
-    # Backfill PM2.5 from forecast if missing
+    # Backfill PM2.5 from forecast
     try:
         fpath_back = resolve_forecast_path(slug)
         _fdf = load_csv_safe(fpath_back, parse_dates=["ds"])
@@ -129,7 +115,7 @@ def _sanitize_overview_df(df: pd.DataFrame, slug: str) -> pd.DataFrame:
             df.loc[miss, "aqi"] = aqi_vals[miss]
             df.loc[miss, "aqi_category"] = cat_vals[miss]
 
-    keep = ["datetime","pm2_5","pm10","o3","no2","so2","co","aqi","aqi_category","latitude","longitude","temp","humidity","wind_speed"]
+    keep = ["datetime","pm2_5","aqi","aqi_category","latitude","longitude","temp","humidity","wind_speed"]
     df = drop_mostly_empty_columns(df, thresh=0.98, keep=keep)
     df = drop_empty_columns(df)
     return df
@@ -140,7 +126,7 @@ with st.sidebar:
     city = st.text_input("City", value="Hyderabad")
     lat = st.number_input("Latitude", value=17.3850, format="%.6f")
     lon = st.number_input("Longitude", value=78.4867, format="%.6f")
-    st.caption("Run the pipeline from the terminal to regenerate files.")
+    st.caption("Run the pipeline from terminal to regenerate files.")
 
 tabs = st.tabs(
     ["Overview", "EDA", "Patterns", "Forecasts", "Anomalies", "Health", "Models", "Live Now"]
@@ -161,45 +147,34 @@ paths = {
 # ---------- Overview ----------
 with tabs[0]:
     st.subheader("Overview")
-    raw_df = resolve_processed(city)
-    if raw_df is None or raw_df.empty:
+    fdf = resolve_processed(city)
+    if fdf is None or fdf.empty:
         st.warning("No processed file found. Showing sample data for demo.")
-        raw_df = synthetic_processed(city)
-
+        fdf = synthetic_processed(city)
     fdf = ensure_numeric(
-        raw_df,
+        fdf,
         ["pm2_5","pm10","no2","o3","so2","co","aqi","temp","humidity","wind_speed","latitude","longitude"],
     )
-    fdf = _sanitize_overview_df(fdf, slug).sort_values("datetime")
+    fdf = _sanitize_overview_df(fdf, slug)
 
-    pollutants = [c for c in ["pm2_5","pm10","o3","no2","so2","co"] if c in fdf.columns]
-    view = last_nonnull_window(fdf, pollutants, window=300)
-    # If still all-NaN pollutants, fall back to most recent rows that have any pollutant
-    if pollutants and not view[pollutants].notna().any().any():
-        nonnull_mask = fdf[pollutants].notna().any(axis=1)
-        if nonnull_mask.any():
-            view = fdf[nonnull_mask].tail(300)
-
-    # KPIs use non-null block
-    disp_aqi = float(view["aqi"].dropna().tail(1).mean()) if "aqi" in view and view["aqi"].notna().any() else np.nan
     c1, c2, c3, c4 = st.columns(4)
+    disp_aqi = float(fdf["aqi"].dropna().tail(1).mean()) if "aqi" in fdf and fdf["aqi"].notna().any() else np.nan
     c1.metric("AQI", "—" if np.isnan(disp_aqi) else f"{disp_aqi:.1f}")
-    c2.metric("Rows", f"{len(view):,}")
-    if "datetime" in view.columns:
-        c3.metric("Last timestamp", str(pd.to_datetime(view["datetime"]).max()))
+    c2.metric("Rows", f"{len(fdf):,}")
+    if "datetime" in fdf.columns:
+        c3.metric("Last timestamp", str(pd.to_datetime(fdf["datetime"]).max()))
     c4.metric("Last anomaly", "See Anomalies tab")
 
-    st.dataframe(drop_empty_columns(view), use_container_width=True)
+    st.dataframe(fdf.tail(300), use_container_width=True)
 
     st.markdown("### Map")
     try:
-        map_df = view if {"latitude","longitude"}.issubset(view.columns) else fdf
-        if {"latitude","longitude"}.issubset(map_df.columns) and map_df[["latitude","longitude"]].notna().any().any():
-            mdf = map_df.dropna(subset=["latitude","longitude"]).tail(1000).copy()
-            mdf["color"] = mdf.get("pm2_5", mdf.get("aqi", 0))
+        if {"latitude","longitude"}.issubset(fdf.columns) and fdf[["latitude","longitude"]].notna().any().any():
+            _mapdf = fdf.dropna(subset=["latitude","longitude"]).tail(1000).copy()
+            _mapdf["color"] = _mapdf.get("pm2_5", _mapdf.get("aqi", 0))
             st.plotly_chart(
                 px.scatter_mapbox(
-                    mdf, lat="latitude", lon="longitude", color="color",
+                    _mapdf, lat="latitude", lon="longitude", color="color",
                     color_continuous_scale="Turbo", zoom=9, height=360,
                     title="Locations colored by PM2.5/AQI"
                 ).update_layout(mapbox_style="open-street-map"),
@@ -227,6 +202,7 @@ with tabs[1]:
         df = synthetic_processed(city)
     df = coerce_none_like(df)
     df = ensure_numeric(df, ["pm2_5","pm10","no2","o3","so2","co","temp","humidity","wind_speed","latitude","longitude"])
+    # backfill & drop mostly-empty
     try:
         fpath_back = resolve_forecast_path(slug)
         _fdf = load_csv_safe(fpath_back, parse_dates=["ds"])
