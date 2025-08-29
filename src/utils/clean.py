@@ -51,6 +51,10 @@ def drop_empty_columns(df: pd.DataFrame, keep: list[str] | None = None) -> pd.Da
     if df is None or df.empty:
         return df
     tmp = df.replace({"None": np.nan, "": np.nan})
+    try:
+        tmp = tmp.infer_objects(copy=False)
+    except Exception:
+        pass
     mask = tmp.notna().any(axis=0)
     out = tmp.loc[:, mask]
     if keep:
@@ -73,6 +77,10 @@ def drop_mostly_empty_columns(df: pd.DataFrame, thresh: float = 0.95, keep: list
     if df is None or df.empty:
         return df
     tmp = df.replace({"None": np.nan, "": np.nan})
+    try:
+        tmp = tmp.infer_objects(copy=False)
+    except Exception:
+        pass
     frac_nan = tmp.isna().mean()
     keep = keep or []
     cols = [c for c in tmp.columns if (frac_nan[c] < thresh) or (c in keep)]
