@@ -8,7 +8,7 @@ import streamlit as st
 import plotly.express as px
 
 from src.utils.live_fetch import fetch_live_point, livepoint_to_df
-from src.utils.clean import coerce_none_like, fill_missing_for_display
+from src.utils.clean import coerce_none_like, fill_missing_for_display, drop_empty_columns, has_enough_points
 from src.utils.paths import resolve_processed, resolve_forecast_path
 
 st.set_page_config(page_title="Urban AQI", page_icon="🌆", layout="wide")
@@ -124,7 +124,35 @@ with tabs[0]:
         c3.metric("Last timestamp", str(pd.to_datetime(fdf["datetime"]).max()))
     c4.metric("Last anomaly", "See Anomalies tab")
 
+    fdf = drop_empty_columns(fdf)
     st.dataframe(fdf.tail(300), use_container_width=True)
+
+    st.markdown("### Map")
+    try:
+        if {"latitude","longitude"}.issubset(fdf.columns) and fdf[["latitude","longitude"]].notna().any().any():
+            _mapdf = fdf.dropna(subset=["latitude","longitude"]).tail(1000).copy()
+            _mapdf["color"] = _mapdf.get("pm2_5", _mapdf.get("aqi", 0))
+            st.plotly_chart(
+                px.scatter_mapbox(
+                    _mapdf, lat="latitude", lon="longitude", color="color",
+                    color_continuous_scale="Turbo", zoom=9, height=360,
+                    title="Locations colored by PM2.5/AQI"
+                ).update_layout(mapbox_style="open-street-map"),
+                use_container_width=True,
+            )
+        else:
+            _mdf = pd.DataFrame({"latitude":[float(lat)],"longitude":[float(lon)],
+                                 "color":[display_aqi if not np.isnan(display_aqi) else 0]})
+            st.plotly_chart(
+                px.scatter_mapbox(
+                    _mdf, lat="latitude", lon="longitude", color="color",
+                    color_continuous_scale="Turbo", zoom=10, height=360,
+                    title="City marker"
+                ).update_layout(mapbox_style="open-street-map"),
+                use_container_width=True,
+            )
+    except Exception:
+        st.caption("Map unavailable (missing coords)")
 
 # ---------- EDA ----------
 with tabs[1]:
@@ -140,45 +168,36 @@ with tabs[1]:
     df = ensure_numeric(
         df,
         [
-            "pm2_5",
-            "pm10",
-            "no2",
-            "o3",
-            "so2",
-            "co",
-            "temp",
-            "humidity",
-            "wind_speed",
-            "latitude",
-            "longitude",
+            "pm2_5","pm10","no2","o3","so2","co","temp","humidity","wind_speed","latitude","longitude",
         ],
     )
+    df = drop_empty_columns(df)
 
-    if "datetime" in df and "pm2_5" in df:
+    if "datetime" in df and "pm2_5" in df and has_enough_points(df, ["datetime","pm2_5"], 10):
         st.plotly_chart(
             px.line(df, x="datetime", y="pm2_5", title="PM2.5 over time"),
             use_container_width=True,
         )
 
     num_cols = [c for c in ["pm2_5", "pm10", "no2", "o3", "so2", "co"] if c in df.columns]
-    if num_cols:
+    if num_cols and has_enough_points(df, num_cols, 10):
         st.plotly_chart(
             px.histogram(df, x=num_cols, marginal="rug", title="Pollutant distributions", barmode="overlay"),
             use_container_width=True,
         )
 
-    if {"pm2_5", "temp"}.issubset(df.columns):
+    if {"pm2_5", "temp"}.issubset(df.columns) and has_enough_points(df, ["pm2_5","temp"], 10):
         st.plotly_chart(
             px.scatter(df, x="temp", y="pm2_5", trendline="ols", title="PM2.5 vs Temperature"),
             use_container_width=True,
         )
-    if {"pm2_5", "humidity"}.issubset(df.columns):
+    if {"pm2_5", "humidity"}.issubset(df.columns) and has_enough_points(df, ["pm2_5","humidity"], 10):
         st.plotly_chart(
             px.scatter(df, x="humidity", y="pm2_5", trendline="ols", title="PM2.5 vs Humidity"),
             use_container_width=True,
         )
 
-    if "datetime" in df and "pm2_5" in df:
+    if "datetime" in df and "pm2_5" in df and has_enough_points(df, ["datetime","pm2_5"], 24):
         tmp = df[["datetime", "pm2_5"]].dropna().copy()
         tmp["weekday"] = pd.to_datetime(tmp["datetime"]).dt.dayofweek
         tmp["hour"] = pd.to_datetime(tmp["datetime"]).dt.hour
@@ -187,7 +206,8 @@ with tabs[1]:
                         use_container_width=True)
 
     corr_cols = [c for c in num_cols + ["temp", "humidity", "wind_speed"] if c in df.columns]
-    if corr_cols:
+    corr_cols = [c for c in corr_cols if df[c].notna().any()]
+    if len(corr_cols) >= 2:
         corr = df[corr_cols].corr(numeric_only=True).fillna(0)
         st.plotly_chart(px.imshow(corr, text_auto=False, title="Correlation heatmap"),
                         use_container_width=True)
@@ -218,13 +238,13 @@ with tabs[2]:
 
     if seas is not None and not seas.empty:
         st.markdown("**Daily seasonality (summary)**")
-        st.dataframe(seas, use_container_width=True)
+        st.dataframe(drop_empty_columns(seas), use_container_width=True)
     else:
         st.info("No seasonal CSV yet. If processed data exists, run patterns step.")
 
     if assoc is not None and not assoc.empty:
         st.markdown("**Association rules (top)**")
-        st.dataframe(assoc.head(2000), use_container_width=True)
+        st.dataframe(drop_empty_columns(assoc).head(2000), use_container_width=True)
     else:
         st.info("No association rules CSV yet.")
 
@@ -252,7 +272,7 @@ with tabs[4]:
     st.subheader("Anomalies")
     adf = load_csv_safe(paths["anoms"], parse_dates=["datetime"])
     if adf is not None and not adf.empty:
-        st.dataframe(adf.tail(500), use_container_width=True)
+        st.dataframe(drop_empty_columns(adf).tail(500), use_container_width=True)
         if "score" in adf.columns:
             st.plotly_chart(px.line(adf, x="datetime", y="score", title="Anomaly scores over time"),
                             use_container_width=True)
@@ -264,7 +284,7 @@ with tabs[5]:
     st.subheader("Health risk")
     hdf = load_csv_safe(paths["health"], parse_dates=["datetime"])
     if hdf is not None and not hdf.empty:
-        st.dataframe(hdf.tail(500), use_container_width=True)
+        st.dataframe(drop_empty_columns(hdf).tail(500), use_container_width=True)
         ycol = (
             "health_risk_score"
             if "health_risk_score" in hdf.columns
@@ -285,6 +305,7 @@ with tabs[5]:
     else:
         st.info("No health file yet.")
 
+
 # ---------- Models ----------
 with tabs[6]:
     st.subheader("Model Scores")
@@ -293,22 +314,37 @@ with tabs[6]:
         mfile = MODELS / "supervised_metrics.json"
     if mfile.exists():
         import json
-        metrics = json.loads(mfile.read_text())
-        if isinstance(metrics, dict):
+        blob = json.loads(mfile.read_text())
+        reg = blob.get("regression") if isinstance(blob, dict) else None
+        clf = blob.get("classification") if isinstance(blob, dict) else None
+
+        def _df_from_metrics(d):
             rows = []
-            for model_name, m in metrics.items():
-                if isinstance(m, dict):
+            if isinstance(d, dict):
+                for model_name, metrics in d.items():
                     row = {"model": model_name}
-                    for k, v in m.items():
-                        if isinstance(v, (int, float, str)):
-                            row[k] = v
+                    if isinstance(metrics, dict):
+                        for k, v in metrics.items():
+                            if isinstance(v, (int, float, str)):
+                                row[k] = v
                     rows.append(row)
-            if rows:
-                st.dataframe(pd.DataFrame(rows), use_container_width=True)
+            return pd.DataFrame(rows) if rows else None
+
+        reg_df = _df_from_metrics(reg)
+        clf_df = _df_from_metrics(clf)
+
+        if reg_df is not None and not reg_df.empty:
+            st.markdown("**Regression**")
+            st.dataframe(reg_df, use_container_width=True)
+        if clf_df is not None and not clf_df.empty:
+            st.markdown("**Classification**")
+            st.dataframe(clf_df, use_container_width=True)
+        if (reg_df is None or reg_df.empty) and (clf_df is None or clf_df.empty):
+            # fallback: generic/flat dict
+            if isinstance(blob, dict):
+                st.json(blob)
             else:
-                st.json(metrics)
-        else:
-            st.json(metrics)
+                st.write(blob)
     else:
         st.info("No supervised metrics file found yet. Train models to populate this tab.")
 
