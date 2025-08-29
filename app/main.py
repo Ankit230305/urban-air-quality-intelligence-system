@@ -12,6 +12,26 @@ from src.utils.paths import resolve_processed, resolve_forecast_path
 from src.utils.clean import (coerce_none_like, fill_missing_for_display, drop_empty_columns, drop_mostly_empty_columns, has_enough_points, recent_nonnull_window, backfill_pm_from_forecast)
 
 st.set_page_config(page_title="Urban AQI", page_icon="🌆", layout="wide")
+
+def _aqi_from_pm25(pm):
+    """Compute AQI + category from PM2.5 (µg/m³) using EPA breakpoints."""
+    import math
+    if pm is None or (isinstance(pm, float) and math.isnan(pm)):
+        return None, "Unknown"
+    bp = [
+        (0.0, 12.0,     0,  50,   "Good"),
+        (12.1, 35.4,   51, 100,   "Moderate"),
+        (35.5, 55.4,  101, 150,   "Unhealthy for SG"),
+        (55.5, 150.4, 151, 200,   "Unhealthy"),
+        (150.5, 250.4,201, 300,   "Very Unhealthy"),
+        (250.5, 500.4,301, 500,   "Hazardous"),
+    ]
+    for c_low, c_high, i_low, i_high, cat in bp:
+        if c_low <= pm <= c_high:
+            aqi = (i_high - i_low)/(c_high - c_low) * (pm - c_low) + i_low
+            return round(aqi, 1), cat
+    return 500.0, "Hazardous"
+
 st.title("Urban Air Quality Intelligence System")
 
 DATA_DIR = Path("data")
@@ -120,6 +140,25 @@ with tabs[0]:
         pass
     # Hide mostly-empty columns
     fdf = drop_mostly_empty_columns(fdf, thresh=0.95, keep=["datetime","latitude","longitude","aqi","pm2_5"])
+    # Fill AQI/category from pm2_5 if AQI is missing
+    if "pm2_5" in fdf.columns:
+        fdf["aqi"] = fdf.get("aqi")
+        fdf["aqi_category"] = fdf.get("aqi_category")
+        miss = fdf["aqi"].isna() if "aqi" in fdf else fdf["pm2_5"].notna()
+        if miss.any():
+            _aqi_vals = []
+            _aqi_cat = []
+            for v in fdf["pm2_5"]:
+                a, c = _aqi_from_pm25(v)
+                _aqi_vals.append(a)
+                _aqi_cat.append(c)
+            if "aqi" not in fdf: fdf["aqi"] = None
+            if "aqi_category" not in fdf: fdf["aqi_category"] = None
+            fdf.loc[miss, "aqi"] = [x for i, x in enumerate(_aqi_vals) if miss.iloc[i]]
+            fdf.loc[miss, "aqi_category"] = [x for i, x in enumerate(_aqi_cat) if miss.iloc[i]]
+    # Final clean: drop mostly-empty columns again & strip all-None columns
+    fdf = drop_mostly_empty_columns(fdf, thresh=0.98)
+    fdf = drop_empty_columns(fdf)
 
     c1, c2, c3, c4 = st.columns(4)
     display_aqi = np.nan
@@ -299,8 +338,9 @@ with tabs[4]:
     st.subheader("Anomalies")
     adf = load_csv_safe(paths["anoms"], parse_dates=["datetime"])
     if adf is not None and not adf.empty:
-        hide = [c for c in ["temp","humidity","precip"] if c in adf.columns]
+        hide = [c for c in ["temp","humidity","precip","wind_speed","is_anomaly"] if c in adf.columns]
         adf = adf.drop(columns=hide)
+        adf = drop_mostly_empty_columns(adf, thresh=0.98)
         st.dataframe(drop_empty_columns(adf).tail(500), use_container_width=True)
         if "score" in adf.columns:
             st.plotly_chart(px.line(adf, x="datetime", y="score", title="Anomaly scores over time"),
@@ -313,6 +353,9 @@ with tabs[5]:
     st.subheader("Health risk")
     hdf = load_csv_safe(paths["health"], parse_dates=["datetime"])
     if hdf is not None and not hdf.empty:
+        _hide = [c for c in ["temp","humidity","wind_speed","precip"] if c in hdf.columns]
+        hdf = hdf.drop(columns=_hide)
+        hdf = drop_mostly_empty_columns(hdf, thresh=0.98)
         st.dataframe(drop_empty_columns(hdf).tail(500), use_container_width=True)
         ycol = (
             "health_risk_score"
