@@ -8,8 +8,8 @@ import streamlit as st
 import plotly.express as px
 
 from src.utils.live_fetch import fetch_live_point, livepoint_to_df
-from src.utils.clean import coerce_none_like, fill_missing_for_display, drop_empty_columns, has_enough_points
 from src.utils.paths import resolve_processed, resolve_forecast_path
+from src.utils.clean import coerce_none_like, fill_missing_for_display, drop_empty_columns, has_enough_points
 
 st.set_page_config(page_title="Urban AQI", page_icon="🌆", layout="wide")
 st.title("Urban Air Quality Intelligence System")

@@ -45,3 +45,25 @@ def fill_missing_for_display(df: pd.DataFrame) -> pd.DataFrame:
         if col in out.columns:
             out[col] = out[col].fillna(default)
     return out
+
+def drop_empty_columns(df: pd.DataFrame, keep: list[str] | None = None) -> pd.DataFrame:
+    # Drop columns that are entirely NaN or the literal strings 'None' or ''.
+    if df is None or df.empty:
+        return df
+    tmp = df.replace({"None": np.nan, "": np.nan})
+    mask = tmp.notna().any(axis=0)
+    out = tmp.loc[:, mask]
+    if keep:
+        keep = [c for c in keep if c in tmp.columns and c not in out.columns]
+        if keep:
+            out = pd.concat([out, tmp[keep]], axis=1)
+    return out
+
+def has_enough_points(df: pd.DataFrame, cols: list[str], min_points: int = 10) -> bool:
+    # True if df has at least `min_points` non-null rows across provided columns.
+    if df is None or df.empty:
+        return False
+    subset = [c for c in cols if c in df.columns]
+    if not subset:
+        return False
+    return df[subset].dropna().shape[0] >= min_points
