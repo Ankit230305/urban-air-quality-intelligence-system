@@ -8,7 +8,7 @@ import streamlit as st
 import plotly.express as px
 
 from src.utils.live_fetch import fetch_live_point, livepoint_to_df
-from src.utils.clean import coerce_none_like, fill_missing_for_display, drop_empty_columns, has_enough_points
+from src.utils.clean import coerce_none_like, fill_missing_for_display, drop_empty_columns, has_enough_points, drop_empty_columns, has_enough_points
 from src.utils.paths import resolve_processed, resolve_forecast_path
 
 st.set_page_config(page_title="Urban AQI", page_icon="🌆", layout="wide")
@@ -124,6 +124,7 @@ with tabs[0]:
         c3.metric("Last timestamp", str(pd.to_datetime(fdf["datetime"]).max()))
     c4.metric("Last anomaly", "See Anomalies tab")
 
+    fdf = drop_empty_columns(fdf)
     fdf = drop_empty_columns(fdf)
     st.dataframe(fdf.tail(300), use_container_width=True)
 
@@ -304,6 +305,7 @@ with tabs[5]:
         st.info(f"Current risk band: **{band}** — {recs.get(band, recs['Unknown'])}")
     else:
         st.info("No health file yet.")
+
 
 
 # ---------- Models ----------
