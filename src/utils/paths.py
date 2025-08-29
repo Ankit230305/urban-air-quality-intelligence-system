@@ -24,6 +24,7 @@ def resolve_processed(city: str):
                 pass
     return None
 
+
 def resolve_forecast_path(slug: str) -> Path:
     """Prefer city-specific forecast; fallback to generic."""
     p_city = Path("models") / f"forecast_pm25_{slug}.csv"
