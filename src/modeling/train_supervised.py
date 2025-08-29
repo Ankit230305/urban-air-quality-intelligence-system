@@ -34,6 +34,29 @@ def _save_metrics(metrics: dict, city: str) -> None:
         json.dump(metrics, f, indent=2)
 
 
+GradientBoostingRegressor,
+    HistGradientBoostingRegressor,
+    RandomForestClassifier,
+    RandomForestRegressor,
+)
+    accuracy_score,
+    confusion_matrix,
+    f1_score,
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score,
+)
+
+def _save_metrics(metrics: dict, city: str) -> None:
+    """Persist supervised model metrics next to models/."""
+    slug = (city or "").lower().replace(" ", "_")
+    out = Path("models") / (
+        f"supervised_metrics_{slug}.json" if slug else "supervised_metrics.json"
+    )
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w") as f:
+        json.dump(metrics, f, indent=2)
+
 lug = (city or "").lower().replace(" ", "_")
     out = Path("models") / (f"supervised_metrics_{slug}.json" if slug else "supervised_metrics.json")
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -316,7 +339,6 @@ if __name__ == "__main__":
     main()
 
 def _save_metrics(metrics: dict, city: str) -> None:
-    from pathlib import Path, json
     out = Path("models") / (f"supervised_metrics_{city.lower().replace(' ', '_')}.json" if city else "supervised_metrics.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w") as f:

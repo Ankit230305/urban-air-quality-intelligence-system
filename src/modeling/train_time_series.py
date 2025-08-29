@@ -16,7 +16,6 @@ def make_naive(series: pd.Series) -> pd.Series:
             pass
     return s
 
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--input-file", required=True)
@@ -52,7 +51,6 @@ def main():
     out_file = outdir / (f"forecast_pm25_{slug}.csv" if slug else "forecast_pm25.csv")
     fcst.to_csv(out_file, index=False)
     print(f"✅ Saved forecast to {out_file} (rows={len(fcst)})")
-
 
 if __name__ == "__main__":
     main()
