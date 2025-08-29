@@ -175,6 +175,7 @@ with tabs[0]:
 
     fdf = drop_empty_columns(fdf)
     fdf = drop_empty_columns(fdf)
+    fdf = _sanitize_overview_df(fdf, slug)
     st.dataframe(fdf.tail(300), use_container_width=True)
 
     st.markdown("### Map")
@@ -458,3 +459,43 @@ with tabs[7]:
                 "• Check network connectivity.\n"
                 f"• Details: {exc}"
             )
+
+def _sanitize_overview_df(df, slug):
+    \"\"\"Finalize Overview table:
+    - replace 'None' with NaN
+    - backfill pm2_5 from forecast (if missing)
+    - derive AQI + category from pm2_5 when missing
+    - drop mostly-empty columns (keep key cols)
+    \"\"\"
+    if df is None or df.empty:
+        return df
+    # Backfill from forecast
+    try:
+        fpath_back = resolve_forecast_path(slug)
+        _fdf = load_csv_safe(fpath_back, parse_dates=["ds"])
+        if _fdf is not None and not _fdf.empty:
+            df = backfill_pm_from_forecast(df, _fdf, pm_col="pm2_5")
+    except Exception:
+        pass
+
+    # Compute AQI/category from pm2_5 if missing
+    import numpy as np
+    if "pm2_5" in df.columns:
+        if "aqi" not in df.columns:
+            df["aqi"] = np.nan
+        if "aqi_category" not in df.columns:
+            df["aqi_category"] = np.nan
+        miss = df["aqi"].isna()
+        if miss.any():
+            a_vals, a_cats = [], []
+            for v in df["pm2_5"]:
+                a, c = _aqi_from_pm25(v)
+                a_vals.append(a); a_cats.append(c)
+            df.loc[miss, "aqi"] = [a for i, a in enumerate(a_vals) if miss.iloc[i]]
+            df.loc[miss, "aqi_category"] = [c for i, c in enumerate(a_cats) if miss.iloc[i]]
+
+    # Final tidy: drop mostly-empty columns but keep essential ones
+    keep = ["datetime","pm2_5","aqi","aqi_category","latitude","longitude","temp","humidity","wind_speed"]
+    df = drop_mostly_empty_columns(df, thresh=0.98, keep=keep)
+    df = drop_empty_columns(df)  # remove any that are still all-NaN
+    return df
