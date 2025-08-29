@@ -44,7 +44,7 @@ def _coerce_numeric(df: pd.DataFrame) -> pd.DataFrame:
     ]:
         if c in df.columns:
             # try soft first
-            df[c] = pd.to_numeric(df[c], errors="ignore")
+            df[c] = pd.to_numeric(df[c], errors="coerce")
             # if still object, hard-coerce
             if df[c].dtype == "object":
                 df[c] = pd.to_numeric(df[c], errors="coerce")

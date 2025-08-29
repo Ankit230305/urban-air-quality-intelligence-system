@@ -338,7 +338,7 @@ with tabs[6]:
     else:
         st.info("No supervised metrics file found yet. Train models to populate this tab.")
 # ---------------------------- Live Now ----------------------------
-with tabs[6]:
+with tabs[7]:
     st.subheader("Live Now")
     col = st.columns(2)
     with st.spinner("Fetching live data..."):
