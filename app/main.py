@@ -89,6 +89,34 @@ tabs = st.tabs(["Overview", "EDA", "Patterns", "Forecasts", "Anomalies",
 
 slug = city.lower().replace(" ", "_")
 paths = {
+
+def _resolve_processed(paths_dict, city):
+    """Return a DataFrame using the best available processed file."""
+    import pandas as pd
+    from src.utils.clean import coerce_none_like
+    from pathlib import Path
+    slug = city.lower().replace(" ", "_")
+    # 1) preferred: *_features_plus_demo.csv
+    p1 = Path("data/processed") / f"{slug}_features_plus_demo.csv"
+    # 2) fallback: *__features.csv
+    p2 = Path("data/processed") / f"{slug}__features.csv"
+    # 3) legacy naming?
+    p3 = Path("data/processed") / f"{slug}_features.csv"
+    for cand in (p1, p2, p3):
+        if cand.exists():
+            try:
+                df = pd.read_csv(cand, parse_dates=["datetime"])
+                return coerce_none_like(df)
+            except Exception:
+                pass
+    return None
+
+def _resolve_forecast_path(slug):
+    """Prefer city-specific forecast; fallback to generic forecast_pm25.csv."""
+    from pathlib import Path
+    p_city = Path("models") / f"forecast_pm25_{slug}.csv"
+    p_generic = Path("models") / "forecast_pm25.csv"
+    return p_city if p_city.exists() else p_generic
     "processed": PROC / f"{slug}_features_plus_demo.csv",
     "anoms": PROC / f"{slug}_anomalies.csv",
     "health": PROC / f"{slug}_health.csv",
@@ -103,7 +131,7 @@ paths = {
 # ---------------------------- Overview ----------------------------
 with tabs[0]:
     st.subheader("Overview")
-    fdf = load_csv_safe(paths["processed"], parse_dates=["datetime"])
+    fdf = _resolve_processed(paths, city)
     if fdf is None or fdf.empty:
         st.warning("No processed file found. Showing sample data for demo.")
         fdf = synthetic_processed(city)
@@ -133,7 +161,7 @@ with tabs[0]:
 # ---------------------------- EDA ----------------------------
 with tabs[1]:
     st.subheader("EDA")
-    df = load_csv_safe(paths["processed"], parse_dates=["datetime"])
+    df = _resolve_processed(paths, city)
     used_synth = False
     if df is None or df.empty:
         st.info("Sample data shown (run pipeline to see real data).")
@@ -234,7 +262,7 @@ with tabs[2]:
 # ---------------------------- Forecasts ----------------------------
 with tabs[3]:
     st.subheader("7-day PM2.5 forecast")
-    fdf = load_csv_safe(paths["forecast"], parse_dates=["ds"])
+    fdf = load_csv_safe(_resolve_forecast_path(slug), parse_dates=["ds"])
     if fdf is not None and not fdf.empty:
         st.dataframe(fdf.tail(200), use_container_width=True)
         if {"ds", "yhat"}.issubset(fdf.columns):
@@ -291,6 +319,8 @@ with tabs[6]:
     st.subheader("Model Scores")
     # expects models/supervised_metrics_<city>.json
     mfile = MODELS / f"supervised_metrics_{slug}.json"
+    if not mfile.exists():
+        mfile = MODELS / "supervised_metrics.json"
     if mfile.exists():
         import json
         metrics = json.loads(mfile.read_text())

@@ -137,7 +137,7 @@ def main():
     if args.target not in df.columns:
         metrics["regression"] = {}
         (outdir / f"supervised_metrics_{city_slug}.json").write_text(json.dumps(metrics, indent=2))
-        print(json.dumps(metrics, indent=2))
+        _save_metrics(metrics, args.city)  # , indent=2))
         return
 
     feats = safe_feature_list(df, args.target)
@@ -286,8 +286,16 @@ def main():
         metrics["classification"] = cls_results
 
     (outdir / f"supervised_metrics_{city_slug}.json").write_text(json.dumps(metrics, indent=2))
-    print(json.dumps(metrics, indent=2))
+    _save_metrics(metrics, args.city)  # , indent=2))
 
 
 if __name__ == "__main__":
     main()
+
+
+def _save_metrics(metrics: dict, city: str) -> None:
+    from pathlib import Path, json
+    out = Path("models") / (f"supervised_metrics_{city.lower().replace(' ', '_')}.json" if city else "supervised_metrics.json")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w") as f:
+        json.dump(metrics, f, indent=2)
