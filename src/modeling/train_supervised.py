@@ -4,6 +4,16 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+def _save_metrics(metrics: dict, city: str) -> None:
+    """Persist supervised model metrics next to models/"""
+    from pathlib import Path
+    import json
+    slug = (city or "").lower().replace(" ", "_")
+    out = Path("models") / (f"supervised_metrics_{slug}.json" if slug else "supervised_metrics.json")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w") as f:
+        json.dump(metrics, f, indent=2)
+
 from sklearn.ensemble import (
     RandomForestRegressor,
     GradientBoostingRegressor,
