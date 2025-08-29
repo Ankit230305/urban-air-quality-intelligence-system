@@ -4,6 +4,7 @@ from pathlib import Path
 import pandas as pd
 from prophet import Prophet
 
+
 def make_naive(series: pd.Series) -> pd.Series:
     s = pd.to_datetime(series, errors="coerce")
     try:
@@ -14,6 +15,7 @@ def make_naive(series: pd.Series) -> pd.Series:
         except Exception:
             pass
     return s
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -50,6 +52,7 @@ def main():
     out_file = outdir / (f"forecast_pm25_{slug}.csv" if slug else "forecast_pm25.csv")
     fcst.to_csv(out_file, index=False)
     print(f"✅ Saved forecast to {out_file} (rows={len(fcst)})")
+
 
 if __name__ == "__main__":
     main()
