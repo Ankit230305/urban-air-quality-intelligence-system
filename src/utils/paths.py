@@ -6,7 +6,6 @@ import pandas as pd
 
 from .clean import coerce_none_like
 
-
 def resolve_processed(city: str):
     """Return a DataFrame using the best available processed file for a city."""
     slug = city.lower().replace(" ", "_")
@@ -23,7 +22,6 @@ def resolve_processed(city: str):
             except Exception:
                 pass
     return None
-
 
 def resolve_forecast_path(slug: str) -> Path:
     """Prefer city-specific forecast; fallback to generic."""
