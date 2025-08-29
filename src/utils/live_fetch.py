@@ -33,25 +33,47 @@ class LivePoint:
 
 
 def _owm_get(url: str, lat: float, lon: float) -> Dict[str, Any]:
+    """
+    Call an OpenWeatherMap endpoint with API-key handling and friendly errors.
+    """
     cfg = get_config()
     key = getattr(cfg, "OPENWEATHERMAP_API_KEY", None)
     if not key:
-        raise RuntimeError("OPENWEATHERMAP_API_KEY is missing.")
-    resp = requests.get(url, params={"lat": lat, "lon": lon, "appid": key},
-                        timeout=20)
-    resp.raise_for_status()
-    return resp.json()
+        raise RuntimeError(
+            "Missing OpenWeatherMap API key.\n"
+            "Set OPENWEATHERMAP_API_KEY in a .env file or export it "
+            "in your shell to enable live data fetching."
+        )
+    try:
+        resp = requests.get(
+            url, params={"lat": lat, "lon": lon, "appid": key}, timeout=20
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except requests.HTTPError as http_err:
+        raise RuntimeError(
+            f"OpenWeatherMap API request failed "
+            f"({http_err.response.status_code} {http_err.response.reason})."
+        ) from http_err
+    except requests.RequestException as req_err:
+        raise RuntimeError(f"Network error calling OpenWeatherMap: {req_err}") from req_err
 
 
 def fetch_live_point(city: str, lat: float, lon: float) -> LivePoint:
+    """
+    Fetch one live snapshot (pollutants + current weather) for a location.
+    """
     air = _owm_get(OWM_AIR_URL, lat, lon)
-    comp = air["list"][0]["components"]
-    aqi = int(air["list"][0]["main"]["aqi"])
+    try:
+        comp = air["list"][0]["components"]
+        aqi = int(air["list"][0]["main"]["aqi"])
+    except (KeyError, IndexError, ValueError) as e:
+        raise RuntimeError(f"Malformed air-pollution payload: {e}") from e
 
     wx = _owm_get(OWM_WEATHER_URL, lat, lon)
-    main = wx.get("main", {})
-    wind = wx.get("wind", {})
-    rain = wx.get("rain", {})
+    main = wx.get("main", {}) or {}
+    wind = wx.get("wind", {}) or {}
+    rain = wx.get("rain", {}) or {}
 
     fetched = datetime.now(timezone.utc)
     return LivePoint(

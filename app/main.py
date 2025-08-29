@@ -1,462 +1,322 @@
-#!/usr/bin/env python3
-import json
-import subprocess
-from datetime import date
-from pathlib import Path
-
-import numpy as np
-import pandas as pd
-import plotly.express as px
-import streamlit as st
-import warnings
-warnings.filterwarnings(
-    'ignore', category=FutureWarning,
-    message='.*DataFrame concatenation with empty or all-NA entries is deprecated.*',
-)
+from __future__ import annotations
 
 import os
-import requests
+from pathlib import Path
+from datetime import datetime
+import numpy as np
+import pandas as pd
+import streamlit as st
+import plotly.express as px
+
+from src.utils.live_fetch import fetch_live_point, livepoint_to_df
+
+st.set_page_config(page_title="Urban AQI", page_icon="🌆", layout="wide")
+st.title("Urban Air Quality Intelligence System")
+
+DATA_DIR = Path("data")
+PROC = DATA_DIR / "processed"
+REPORTS = Path("reports")
+MODELS = Path("models")
 
 
-st.set_page_config(page_title="Urban Air Quality Intelligence", layout="wide")
-
-# -----------------------
-# Helpers
-# -----------------------
-CITIES = {
-    "Delhi": (28.7041, 77.1025),
-    "Mumbai": (19.0760, 72.8777),
-    "Bengaluru": (12.9716, 77.5946),
-    "Chennai": (13.0827, 80.2707),
-    "Hyderabad": (17.3850, 78.4867),
-    "Kolkata": (22.5726, 88.3639),
-    "Vizag": (17.6868, 83.2185),
-    "Vellore": (12.9165, 79.1325),
-}
-
-
-def slug_of(city: str) -> str:
-    return city.lower().replace(" ", "_")
-
-
-def find_first_existing(paths):
-    for p in paths:
-        if p and Path(p).exists():
-            return Path(p)
-    return None
-
-
-def find_processed_for_city(slug: str):
-    return find_first_existing([
-        f"data/processed/{slug}__features_plus_demo.csv",
-        f"data/processed/{slug}_features_plus_demo.csv",
-    ])
-
-
-def find_patterns_for_city(slug: str):
-    daily = find_first_existing([f"reports/seasonal_{slug}.csv"])
-    rules = find_first_existing([f"reports/assoc_rules_{slug}.csv"])
-    md = find_first_existing([f"reports/patterns_{slug}.md"])
-    return daily, rules, md
-
-
-def find_metrics_for_city(slug: str):
-    return find_first_existing([f"models/supervised_metrics_{slug}.json"])
-
-
-def find_forecast_for_city(slug: str):
-    return find_first_existing([
-        f"models/forecast_pm25_{slug}.csv",
-        "models/forecast_pm25.csv",
-    ])
-
-
-def find_anomalies_for_city(slug: str):
-    return find_first_existing([
-        f"data/processed/{slug}__anomalies.csv",
-        f"data/processed/{slug}_anomalies.csv",
-    ])
-
-
-def find_health_for_city(slug: str):
-    return find_first_existing([
-        f"data/processed/{slug}__health.csv",
-        f"data/processed/{slug}_health.csv",
-    ])
-
-
-def load_csv_safe(path, parse_dates=None) -> pd.DataFrame:
-    if not path:
-        return pd.DataFrame()
+# ---------------------------- helpers ----------------------------
+def load_csv_safe(p: Path, parse_dates=None) -> pd.DataFrame | None:
     try:
-        return pd.read_csv(path, parse_dates=parse_dates)
-    except Exception as e:
-        st.warning(f"Could not load {path}: {e}")
-        return pd.DataFrame()
+        if not p.exists():
+            return None
+        return pd.read_csv(p, parse_dates=parse_dates)
+    except Exception:
+        return None
 
 
-def as_numeric(df: pd.DataFrame, cols):
-    if df.empty:
-        return df
+def ensure_numeric(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    df = df.copy()
     for c in cols:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
     return df
 
 
-def kpi_card(col, label, value, suffix=""):
-    with col:
-        st.metric(label, f"{value}{suffix}")
+def synthetic_processed(city: str) -> pd.DataFrame:
+    rng = pd.date_range(end=pd.Timestamp.now().floor("h"), periods=7 * 24, freq="h")
+    rs = np.random.RandomState(42)
+    df = pd.DataFrame(
+        {
+            "datetime": rng,
+            "city": city,
+            "pm2_5": np.clip(rs.normal(35, 12, len(rng)), 5, 150),
+            "pm10": np.clip(rs.normal(70, 25, len(rng)), 10, 200),
+            "no2": np.clip(rs.normal(18, 6, len(rng)), 1, 60),
+            "o3": np.clip(rs.normal(25, 10, len(rng)), 1, 120),
+            "so2": np.clip(rs.normal(8, 3, len(rng)), 1, 40),
+            "co": np.clip(rs.normal(400, 120, len(rng)), 100, 1200),
+            "temp": np.clip(rs.normal(298, 4, len(rng)), 285, 310),
+            "humidity": np.clip(rs.normal(55, 15, len(rng)), 15, 95),
+            "wind_speed": np.clip(rs.normal(2.5, 1, len(rng)), 0, 8),
+            "latitude": 0.0,
+            "longitude": 0.0,
+        }
+    )
+    return df
 
 
-# -----------------------
-# Sidebar Controls
-# -----------------------
+def aqi_color(aqi_val: float | int) -> str:
+    if pd.isna(aqi_val):
+        return "gray"
+    v = float(aqi_val)
+    if v <= 50:
+        return "green"
+    if v <= 100:
+        return "yellow"
+    if v <= 200:
+        return "orange"
+    if v <= 300:
+        return "red"
+    return "purple"
+
+
+# ---------------------------- sidebar ----------------------------
 with st.sidebar:
     st.header("Controls")
+    city = st.text_input("City", value="Mumbai")
+    lat = st.number_input("Latitude", value=19.0760, format="%.6f")
+    lon = st.number_input("Longitude", value=72.8777, format="%.6f")
+    run_pipeline = st.button("Run pipeline (files must exist)")
 
-    city = st.selectbox("City", list(CITIES.keys()), index=list(CITIES.keys()).index("Kolkata") if "Kolkata" in CITIES else 0)
-    lat, lon = CITIES[city]
-    ll = st.text_input("Lat, Lon", value=f"{lat}, {lon}")
+tabs = st.tabs(["Overview", "EDA", "Patterns", "Forecasts", "Anomalies",
+                "Health", "Live Now"])
 
-    d_start, d_end = st.date_input(
-        "Date range (UTC)",
-        (date(2024, 8, 17), date(2024, 8, 24))
-    )
-
-    run_btn = st.button("Build / Refresh city data", type="primary", use_container_width=True)
-
-if run_btn:
-    try:
-        lat_str, lon_str = [x.strip() for x in ll.split(",")]
-        cmd = [
-            "bash", "bin/run_city_pipeline.sh",
-            city, lat_str, lon_str,
-            str(d_start), str(d_end)
-        ]
-        with st.spinner(f"Running pipeline for {city}..."):
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
-        st.success("Pipeline finished")
-        st.expander("Build logs", expanded=False).code(proc.stdout + "\n" + proc.stderr)
-    except Exception as e:
-        st.error(f"Pipeline failed: {e}")
-
-slug = slug_of(city)
-
-files = {
-    "processed": find_processed_for_city(slug),
-    "patterns_daily": find_patterns_for_city(slug)[0],
-    "rules": find_patterns_for_city(slug)[1],
-    "patterns_md": find_patterns_for_city(slug)[2],
-    "metrics": find_metrics_for_city(slug),
-    "forecast": find_forecast_for_city(slug),
-    "anomalies": find_anomalies_for_city(slug),
-    "health": find_health_for_city(slug),
+slug = city.lower().replace(" ", "_")
+paths = {
+    "processed": PROC / f"{slug}_features_plus_demo.csv",
+    "anoms": PROC / f"{slug}_anomalies.csv",
+    "health": PROC / f"{slug}_health.csv",
+    "forecast": MODELS / f"forecast_pm25_{slug}.csv",
+    "seasonal": REPORTS / f"seasonal_{slug}.csv",
+    "assoc": REPORTS / f"assoc_rules_{slug}.csv",
+    "patterns": REPORTS / f"patterns_{slug}.md",
+    "live": PROC / f"{slug}__live.csv",
 }
 
-st.title("🌆 Urban Air Quality Intelligence System")
-st.caption(f"City: **{city}**  ·  Data file: **{files['processed'] if files['processed'] else 'not found'}**")
 
-tabs = st.tabs(["Overview", "EDA", "Pattern Discovery", "Models", "Forecast", "Anomalies", "Health"])
-
-# -----------------------
-# Overview Tab
-# -----------------------
+# ---------------------------- Overview ----------------------------
 with tabs[0]:
-    df = load_csv_safe(files["processed"], parse_dates=["datetime"])
-    df = as_numeric(df, ["pm2_5", "pm10", "no2", "o3", "so2", "co", "aqi", "temp", "humidity", "wind_speed", "precip"])
+    st.subheader("Overview")
+    fdf = load_csv_safe(paths["processed"], parse_dates=["datetime"])
+    if fdf is None or fdf.empty:
+        st.warning("No processed file found. Showing sample data for demo.")
+        fdf = synthetic_processed(city)
+    fdf = ensure_numeric(
+        fdf,
+        ["pm2_5", "pm10", "no2", "o3", "so2", "co",
+         "aqi", "temp", "humidity", "wind_speed", "latitude", "longitude"],
+    )
 
-    if df.empty:
-        st.info("No processed dataset found for this city yet. Click **Build / Refresh city data**.")
-    else:
-        latest = df.dropna(subset=["pm2_5", "pm10", "aqi"], how="all").tail(1)
-        c1, c2, c3, c4 = st.columns(4)
-        if not latest.empty:
-            kpi_card(c1, "PM2.5 (latest)", round(float(latest["pm2_5"].iloc[0]), 2) if pd.notna(latest["pm2_5"].iloc[0]) else "NA", " µg/m³")
-            kpi_card(c2, "PM10 (latest)", round(float(latest["pm10"].iloc[0]), 2) if pd.notna(latest["pm10"].iloc[0]) else "NA", " µg/m³")
-            kpi_card(c3, "AQI (latest)", round(float(latest["aqi"].iloc[0]), 2) if pd.notna(latest["aqi"].iloc[0]) else "NA")
-            kpi_card(c4, "Rows", f"{len(df):,}")
+    c1, c2, c3, c4 = st.columns(4)
+    aqi_now = fdf["pm2_5"].tail(24).mean() if "pm2_5" in fdf else np.nan
+    c1.metric("Current AQI proxy (24h mean PM2.5)", f"{aqi_now:.1f}")
+    c2.metric("Rows", f"{len(fdf):,}")
+    if "datetime" in fdf.columns:
+        c3.metric("Last timestamp", str(pd.to_datetime(fdf["datetime"]).max()))
+    if "pm2_5" in fdf.columns:
+        c4.metric("Last anomaly (if any)", "See Anomalies tab")
 
-        st.markdown("#### Hourly Pollution Trend")
-        ycols = [c for c in ["pm2_5", "pm10", "no2", "o3", "so2", "co"] if c in df.columns]
-        if ycols:
-            fig = px.line(df, x="datetime", y=ycols)
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("No pollutant columns present to plot.")
+    st.dataframe(fdf.tail(200), use_container_width=True)
 
-# -----------------------
-# EDA Tab
-# -----------------------
+
+# ---------------------------- EDA ----------------------------
 with tabs[1]:
-    st.markdown("### Exploratory Data Analysis")
-    df = load_csv_safe(files["processed"], parse_dates=["datetime"])
-    df = as_numeric(df, ["pm2_5", "pm10", "no2", "o3", "so2", "co", "aqi", "temp", "humidity", "wind_speed", "precip"])
+    st.subheader("EDA")
+    df = load_csv_safe(paths["processed"], parse_dates=["datetime"])
+    used_synth = False
+    if df is None or df.empty:
+        st.info("Sample data shown (run pipeline to see real data).")
+        df = synthetic_processed(city)
+        used_synth = True
 
-    if df.empty:
-        st.info("No processed data to analyze.")
-    else:
-        st.markdown("#### Summary (last 50 rows)")
-        st.dataframe(df.tail(50), use_container_width=True)
+    df = ensure_numeric(
+        df,
+        ["pm2_5", "pm10", "no2", "o3", "so2", "co",
+         "temp", "humidity", "wind_speed", "latitude", "longitude"],
+    )
 
-        st.markdown("#### Correlation Heatmap")
-        eda_cols = [c for c in ["pm2_5", "pm10", "no2", "o3", "so2", "co", "temp", "humidity", "wind_speed", "precip", "aqi"] if c in df.columns]
-        if len(eda_cols) >= 2:
-            corr = df[eda_cols].corr(numeric_only=True)
-            st.plotly_chart(px.imshow(corr, text_auto=True), use_container_width=True)
-        else:
-            st.info("Not enough numeric columns for correlation heatmap.")
+    # Time series
+    if "datetime" in df and "pm2_5" in df:
+        st.plotly_chart(px.line(df, x="datetime", y="pm2_5",
+                                title="PM2.5 over time"),
+                        use_container_width=True)
 
-        st.markdown("#### AQI Category Distribution")
-        if "aqi_category" in df.columns:
-            st.plotly_chart(px.histogram(df, x="aqi_category"), use_container_width=True)
-        else:
-            st.info("No 'aqi_category' column available.")
+    # Distributions
+    num_cols = [c for c in ["pm2_5", "pm10", "no2", "o3", "so2", "co"] if c in df.columns]
+    if num_cols:
+        st.plotly_chart(px.histogram(df, x=num_cols, marginal="rug",
+                                     title="Pollutant distributions",
+                                     barmode="overlay"),
+                        use_container_width=True)
 
-# -----------------------
-# Pattern Discovery Tab
-# -----------------------
+    # Scatter vs weather
+    if {"pm2_5", "temp"}.issubset(df.columns):
+        st.plotly_chart(px.scatter(df, x="temp", y="pm2_5",
+                                   trendline="ols",
+                                   title="PM2.5 vs Temperature"),
+                        use_container_width=True)
+    if {"pm2_5", "humidity"}.issubset(df.columns):
+        st.plotly_chart(px.scatter(df, x="humidity", y="pm2_5",
+                                   trendline="ols",
+                                   title="PM2.5 vs Humidity"),
+                        use_container_width=True)
+
+    # Seasonality heatmap (weekday x hour)
+    if "datetime" in df and "pm2_5" in df:
+        tmp = df[["datetime", "pm2_5"]].dropna().copy()
+        tmp["weekday"] = pd.to_datetime(tmp["datetime"]).dt.dayofweek
+        tmp["hour"] = pd.to_datetime(tmp["datetime"]).dt.hour
+        pivot = tmp.pivot_table(index="weekday", columns="hour",
+                                values="pm2_5", aggfunc="mean")
+        fig = px.imshow(pivot, aspect="auto",
+                        title="PM2.5 seasonality (weekday x hour)")
+        st.plotly_chart(fig, use_container_width=True)
+
+    # Correlation heatmap
+    corr_cols = [c for c in num_cols + ["temp", "humidity", "wind_speed"] if c in df.columns]
+    if corr_cols:
+        corr = df[corr_cols].corr(numeric_only=True).fillna(0)
+        st.plotly_chart(px.imshow(corr, text_auto=False, title="Correlation heatmap"),
+                        use_container_width=True)
+
+    # Simple map by AQI proxy (PM2.5)
+    if {"latitude", "longitude", "pm2_5"}.issubset(df.columns):
+        mp = df.dropna(subset=["latitude", "longitude"]).tail(1000).copy()
+        if not mp.empty:
+            st.plotly_chart(
+                px.scatter_mapbox(
+                    mp, lat="latitude", lon="longitude", color="pm2_5",
+                    color_continuous_scale="Turbo", zoom=9, height=400,
+                    title="Locations colored by PM2.5"
+                ).update_layout(mapbox_style="open-street-map"),
+                use_container_width=True,
+            )
+
+
+# ---------------------------- Patterns ----------------------------
 with tabs[2]:
-    st.markdown("### Pattern Discovery")
-    daily = load_csv_safe(files["patterns_daily"], parse_dates=["datetime"])
-    rules = load_csv_safe(files["rules"])
+    st.subheader("Seasonality, clustering & association rules")
+    seas = load_csv_safe(paths["seasonal"])
+    assoc = load_csv_safe(paths["assoc"])
+    pat_md = paths["patterns"].read_text() if paths["patterns"].exists() else ""
 
-    if daily.empty:
-        st.info("No seasonal/daily file found. (Run the pipeline first.)")
+    if seas is not None and not seas.empty:
+        st.markdown("**Daily seasonality (summary)**")
+        st.dataframe(seas, use_container_width=True)
     else:
-        st.markdown("#### Daily Means (tail)")
-        st.dataframe(daily.tail(30), use_container_width=True)
+        st.info("No seasonal CSV yet. If processed data exists, run patterns step.")
 
-        if "cluster" in daily.columns and daily["cluster"].notna().any():
-            st.markdown("#### Cluster sizes")
-            st.plotly_chart(px.histogram(daily.dropna(subset=["cluster"]), x="cluster"), use_container_width=True)
-
-    st.markdown("#### Association Rules (top 50)")
-    if rules.empty:
-        st.info("No association rules file found or rules table is empty.")
+    if assoc is not None and not assoc.empty:
+        st.markdown("**Association rules (top)**")
+        st.dataframe(assoc.head(2000), use_container_width=True)
     else:
-        st.dataframe(rules.head(50), use_container_width=True)
+        st.info("No association rules CSV yet.")
 
-# -----------------------
-# Models Tab
-# -----------------------
+    if pat_md:
+        st.markdown("**Pattern notes**")
+        st.markdown(pat_md)
+    else:
+        st.info("No patterns markdown yet.")
+
+
+# ---------------------------- Forecasts ----------------------------
 with tabs[3]:
-    st.markdown("### Supervised Models — Metrics & Comparison")
-    metrics = {}
-    if files["metrics"]:
-        try:
-            metrics = json.loads(Path(files["metrics"]).read_text())
-        except Exception as e:
-            st.warning(f"Could not read metrics JSON: {e}")
-
-    if not metrics:
-        st.info("Metrics JSON not found. Run the pipeline first.")
+    st.subheader("7-day PM2.5 forecast")
+    fdf = load_csv_safe(paths["forecast"], parse_dates=["ds"])
+    if fdf is not None and not fdf.empty:
+        st.dataframe(fdf.tail(200), use_container_width=True)
+        if {"ds", "yhat"}.issubset(fdf.columns):
+            st.plotly_chart(px.line(fdf, x="ds", y="yhat", title="PM2.5 forecast"),
+                            use_container_width=True)
     else:
-        reg = metrics.get("regression", {})
-        clf = metrics.get("classification", {})
+        st.info("No forecast file yet.")
 
-        if reg:
-            st.subheader("Regression (PM2.5)")
-            reg_df = pd.DataFrame(reg).T.reset_index().rename(columns={"index": "Model"})
-            st.dataframe(reg_df, use_container_width=True)
 
-        if clf:
-            st.subheader("Classification (AQI category)")
-            clf_df = pd.DataFrame(clf).T.reset_index().rename(columns={"index": "Model"})
-            st.dataframe(clf_df, use_container_width=True)
-
-# -----------------------
-# Forecast Tab
-# -----------------------
+# ---------------------------- Anomalies ----------------------------
 with tabs[4]:
-    st.markdown("### PM2.5 Forecast")
-    fdf = load_csv_safe(files["forecast"], parse_dates=["ds"])
-    if fdf.empty:
-        fdf = load_csv_safe(files["forecast"], parse_dates=["datetime"])
-
-    if fdf.empty:
-        st.info("No forecast file found yet.")
+    st.subheader("Anomalies")
+    adf = load_csv_safe(paths["anoms"], parse_dates=["datetime"])
+    if adf is not None and not adf.empty:
+        st.dataframe(adf.tail(500), use_container_width=True)
+        if "score" in adf.columns:
+            st.plotly_chart(px.line(adf, x="datetime", y="score",
+                                    title="Anomaly scores over time"),
+                            use_container_width=True)
     else:
-        # Normalize columns
-        if "ds" in fdf.columns:
-            fdf = fdf.rename(columns={"ds": "datetime"})
-        ycols = []
-        if "yhat" in fdf.columns:
-            ycols = ["yhat"]
-            if "yhat_lower" in fdf.columns and "yhat_upper" in fdf.columns:
-                st.area_chart(fdf.set_index("datetime")[["yhat_lower", "yhat_upper"]])
-        elif "pm2_5" in fdf.columns:
-            ycols = ["pm2_5"]
-        else:
-            # fallback to first numeric column
-            ycols = fdf.select_dtypes(include=np.number).columns.tolist()[:1]
+        st.info("No anomalies file yet.")
 
-        if "datetime" in fdf.columns and ycols:
-            st.plotly_chart(px.line(fdf, x="datetime", y=ycols), use_container_width=True)
-        st.dataframe(fdf.tail(50), use_container_width=True)
 
-# -----------------------
-# Anomalies Tab
-# -----------------------
+# ---------------------------- Health ----------------------------
 with tabs[5]:
-    st.markdown("### Anomaly Detection")
-    adf = load_csv_safe(files["anomalies"], parse_dates=["datetime"])
-    if adf.empty:
-        st.info("No anomaly file found (data/processed/*_anomalies.csv).")
+    st.subheader("Health risk")
+    hdf = load_csv_safe(paths["health"], parse_dates=["datetime"])
+    if hdf is not None and not hdf.empty:
+        st.dataframe(hdf.tail(500), use_container_width=True)
+        ycol = "health_risk_score" if "health_risk_score" in hdf.columns else (
+            "risk_index" if "risk_index" in hdf.columns else "aqi")
+        if ycol in hdf.columns:
+            st.plotly_chart(px.line(hdf, x="datetime", y=ycol,
+                                    title=f"Health metric: {ycol}"),
+                            use_container_width=True)
+        # short recommendations
+        band = (hdf["health_risk_band"].iloc[-1]
+                if "health_risk_band" in hdf.columns else "Unknown")
+        recs = {
+            "Low": "Normal activities. Keep windows open, enjoy!",
+            "Moderate": "Sensitive groups should limit prolonged outdoor exertion.",
+            "High": "Wear a mask outdoors; reduce outdoor cardio; use air purifier.",
+            "Very High": "Avoid outdoor activity; N95 mask if you must step out.",
+            "Unknown": "No band available; follow general caution.",
+        }
+        st.info(f"Current risk band: **{band}** — {recs.get(band, recs['Unknown'])}")
     else:
-        st.dataframe(adf.tail(100), use_container_width=True)
-        # Try a simple visualization if pm2_5 present and maybe is_anomaly
-        if "pm2_5" in adf.columns:
-            fig = px.scatter(adf, x="datetime", y="pm2_5",
-                             color=adf["is_anomaly"].astype(str) if "is_anomaly" in adf.columns else None)
-            st.plotly_chart(fig, use_container_width=True)
+        st.info("No health file yet.")
 
-# -----------------------
-# Health Tab
-# -----------------------
+
+# ---------------------------- Live Now ----------------------------
 with tabs[6]:
-    st.markdown("### Health Risk Estimates")
-    hdf = load_csv_safe(files["health"], parse_dates=["datetime"])
-    if hdf.empty:
-        st.info("No health file found (data/processed/*_health.csv).")
-    else:
-        st.dataframe(hdf.tail(50), use_container_width=True)
+    st.subheader("Live Now")
+    col = st.columns(2)
+    with st.spinner("Fetching live data..."):
+        if st.button("Fetch live snapshot"):
+            try:
+                lp = fetch_live_point(city, float(lat), float(lon))
+                df_live = livepoint_to_df(lp)
+                st.success(f"Fetched at {lp.fetched_at.isoformat()}")
+                m1, m2, m3, m4, m5, m6 = st.columns(6)
+                m1.metric("PM2.5 (µg/m³)", f"{lp.pm2_5:.1f}")
+                m2.metric("PM10 (µg/m³)", f"{lp.pm10:.1f}")
+                m3.metric("NO₂ (µg/m³)", f"{lp.no2:.1f}")
+                m4.metric("O₃ (µg/m³)", f"{lp.o3:.1f}")
+                m5.metric("SO₂ (µg/m³)", f"{lp.so2:.1f}")
+                m6.metric("CO (µg/m³)", f"{lp.co:.1f}")
 
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Temp (K)", f"{(lp.temp if lp.temp is not None else float('nan')):.1f}")
+                c2.metric("Humidity (%)", f"{(lp.humidity if lp.humidity is not None else float('nan')):.0f}")
+                c3.metric("Wind (m/s)", f"{(lp.wind_speed if lp.wind_speed is not None else float('nan')):.1f}")
+                c4.metric("OWM AQI (1–5)", f"{lp.aqi}")
 
+                st.dataframe(df_live, use_container_width=True)
 
-# --- Live fetch helper (OpenWeatherMap) ---
-def fetch_live_now(city: str, lat: float, lon: float) -> dict:
-    """
-    Fetch current air pollution + weather from OpenWeatherMap and append one row
-    into data/processed/<slug>__features_plus_demo.csv. Returns info dict.
-    """
-    import pandas as pd
-    from pathlib import Path
-    from datetime import datetime, timezone
-
-    key = os.getenv("OPENWEATHERMAP_API_KEY")
-    if not key:
-        raise RuntimeError("Missing OPENWEATHERMAP_API_KEY in environment.")
-
-    # Current air pollution
-    aq = requests.get(
-        "https://api.openweathermap.org/data/2.5/air_pollution",
-        params={"lat": lat, "lon": lon, "appid": key},
-        timeout=30,
-    ).json()
-
-    # Current weather (metric)
-    wx = requests.get(
-        "https://api.openweathermap.org/data/2.5/weather",
-        params={"lat": lat, "lon": lon, "appid": key, "units": "metric"},
-        timeout=30,
-    ).json()
-
-    comp = aq["list"][0]["components"]
-    aqi  = aq["list"][0]["main"]["aqi"]
-    tm   = datetime.fromtimestamp(aq["list"][0]["dt"], tz=timezone.utc).replace(tzinfo=None)
-
-    row = {
-        "datetime": tm.isoformat(sep=" "),
-        "pm2_5": comp.get("pm2_5"),
-        "pm10": comp.get("pm10"),
-        "no2":  comp.get("no2"),
-        "o3":   comp.get("o3"),
-        "so2":  comp.get("so2"),
-        "co":   comp.get("co"),
-        "aqi": aqi,
-        "temp": wx["main"]["temp"],
-        "humidity": wx["main"]["humidity"],
-        "wind_speed": wx["wind"]["speed"],
-        "precip": (wx.get("rain", {}).get("1h", 0.0)
-                   or wx.get("snow", {}).get("1h", 0.0) or 0.0),
-        "city": city,
-    }
-    df = pd.DataFrame([row])
-
-    slug = city.lower().replace(" ", "_")
-    outdir = Path("data/processed"); outdir.mkdir(parents=True, exist_ok=True)
-    fplus = outdir / f"{slug}__features_plus_demo.csv"
-
-    try:
-        existing = pd.read_csv(fplus, parse_dates=["datetime"])
-    except Exception:
-        existing = None
-
-    if existing is not None:
-        # keep existing columns (e.g., demographics), coerce numerics
-        for c in ["pm2_5","pm10","no2","o3","so2","co","aqi","temp","humidity","wind_speed","precip"]:
-            if c in df.columns:
-                df[c] = pd.to_numeric(df[c], errors="coerce")
-        for c in existing.columns:
-            if c not in df.columns:
-                df[c] = pd.NA
-        df = df.reindex(columns=existing.columns)
-        combined = safe_concat([existing, df], ignore_index=True)
-        combined.to_csv(fplus, index=False)
-        return {"path": str(fplus), "rows": len(combined), "appended": 1, "datetime": row["datetime"]}
-    else:
-        df.to_csv(fplus, index=False)
-        return {"path": str(fplus), "rows": 1, "appended": 1, "datetime": row["datetime"]}
-
-
-
-# --- Sidebar: Live data fetch (OpenWeatherMap) ---
-with st.sidebar.expander("🔄 Live data (OpenWeatherMap)", expanded=False):
-    # Try to reuse existing city/lat/lon if your app already defines them
-    _city = None; _lat = None; _lon = None
-    try:
-        _city = city  # from main app state if available
-    except Exception:
-        pass
-    try:
-        _lat = float(lat)   # from main app state if available
-        _lon = float(lon)
-    except Exception:
-        pass
-
-    if _city is None or _lat is None or _lon is None:
-        _city = st.text_input("City", value="Mumbai", key="live_city")
-        _lat  = st.number_input("Latitude", value=19.0760, format="%.6f", key="live_lat")
-        _lon  = st.number_input("Longitude", value=72.877700, format="%.6f", key="live_lon")
-    else:
-        st.caption(f"Using current selection: {_city} ({_lat:.4f}, {_lon:.4f})")
-
-    col_a, col_b = st.columns([1,1])
-    do_fetch = col_a.button("Fetch live now", key="btn_fetch_live_now")
-    show_path = col_b.checkbox("Show output path", value=False, key="live_show_path")
-
-    if do_fetch:
-        try:
-            info = fetch_live_now(_city, _lat, _lon)
-            # Invalidate any cached readers (if your app uses @st.cache_data)
-            if hasattr(st, "cache_data"):
-                try:
-                    st.cache_data.clear()
-                except Exception:
-                    pass
-            st.success(f"Appended live row ({info['datetime']}) → {info['path'] if show_path else 'processed file'}")
-            # On modern Streamlit versions, this will refresh charts/tables
-            if hasattr(st, "rerun"):
-                st.rerun()
-        except Exception as e:
-            st.error(f"Live fetch failed: {e}")
-            st.stop()
-
-
-# --- util: future-proof concat that ignores empty/all-NA frames ---
-def safe_concat(frames):
-    import pandas as pd
-    clean = []
-    for f in frames or []:
-        if f is None:
-            continue
-        if hasattr(f, "empty") and not f.empty:
-            # drop all-NA columns to stabilize dtype inference
-            f = f.loc[:, f.notna().any(axis=0)]
-            clean.append(f)
-    if not clean:
-        return pd.DataFrame()
-    cols = sorted(set().union(*[tuple(df.columns) for df in clean]))
-    aligned = [df.reindex(columns=cols) for df in clean]
-    return pd.concat(aligned, ignore_index=True)
+                # Optional append to live CSV
+                if st.checkbox("Append this snapshot to live CSV", value=True):
+                    paths["live"].parent.mkdir(parents=True, exist_ok=True)
+                    if paths["live"].exists():
+                        base = pd.read_csv(paths["live"])
+                        df_live = pd.concat([base, df_live], ignore_index=True)
+                    df_live.to_csv(paths["live"], index=False)
+                    st.caption(f"Saved to {paths['live']}")
+            except RuntimeError as exc:
+                st.error(
+                    "Live fetch failed.\n\n"
+                    "Tips:\n"
+                    "• Ensure OPENWEATHERMAP_API_KEY is set in .env or your shell.\n"
+                    "• Check network connectivity.\n"
+                    f"• Details: {exc}"
+                )

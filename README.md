@@ -90,6 +90,23 @@ python -m streamlit run app/main.py
 
 Open the printed Local URL (usually http://localhost:8501).
 
+### Runbook (macOS + VS Code)
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -r requirements.txt
+# Put your key in .env or export before running
+# echo "OPENWEATHERMAP_API_KEY=YOUR_KEY" > .env
+python -m streamlit run app/main.py
+```
+
+### Live Data tips
+- Live Now tab and `bin/fetch_live_now.py` require `OPENWEATHERMAP_API_KEY`.
+- On errors, the app shows a friendly banner (no crashes) and how to fix.
+
+
 ⸻
 
 🛠️ Pipelines & outputs
