@@ -9,6 +9,53 @@ import plotly.express as px
 
 from src.utils.live_fetch import fetch_live_point, livepoint_to_df
 from src.utils.paths import resolve_processed, resolve_forecast_path
+def _sanitize_overview_df(df, slug):
+    """Finalize Overview table:
+    - replace 'None' with NaN
+    - backfill pm2_5 from forecast (if missing)
+    - derive AQI + category from pm2_5 when missing
+    - drop mostly-empty columns (keep key cols)
+    """
+    import numpy as np
+    import pandas as pd
+
+    if df is None or df.empty:
+        return df
+
+    # Backfill pm2_5 from forecast
+    try:
+        fpath_back = resolve_forecast_path(slug)
+        _fdf = load_csv_safe(fpath_back, parse_dates=["ds"])
+        if _fdf is not None and not _fdf.empty:
+            df = backfill_pm_from_forecast(df, _fdf, pm_col="pm2_5")
+    except Exception:
+        pass
+
+    # Compute AQI/category if missing, with dtype-safe assignment
+    if "pm2_5" in df.columns:
+        if "aqi" not in df.columns:
+            df["aqi"] = np.nan
+        if "aqi_category" not in df.columns:
+            df["aqi_category"] = np.nan
+        miss = df["aqi"].isna()
+        if miss.any():
+            aqi_vals = pd.Series(
+                (_aqi_from_pm25(v)[0] for v in df["pm2_5"]),
+                index=df.index, dtype="float64"
+            )
+            cat_vals = pd.Series(
+                (_aqi_from_pm25(v)[1] for v in df["pm2_5"]),
+                index=df.index, dtype="object"
+            )
+            # ensure 'aqi' column is float before assignment
+            df["aqi"] = pd.to_numeric(df["aqi"], errors="coerce")
+            df.loc[miss, "aqi"] = aqi_vals[miss]
+            df.loc[miss, "aqi_category"] = cat_vals[miss]
+
+    keep = ["datetime","pm2_5","aqi","aqi_category","latitude","longitude","temp","humidity","wind_speed"]
+    df = drop_mostly_empty_columns(df, thresh=0.98, keep=keep)
+    df = drop_empty_columns(df)
+    return df
 from src.utils.clean import (coerce_none_like, fill_missing_for_display, drop_empty_columns, drop_mostly_empty_columns, has_enough_points, recent_nonnull_window, backfill_pm_from_forecast)
 
 st.set_page_config(page_title="Urban AQI", page_icon="🌆", layout="wide")
@@ -140,25 +187,7 @@ with tabs[0]:
         pass
     # Hide mostly-empty columns
     fdf = drop_mostly_empty_columns(fdf, thresh=0.95, keep=["datetime","latitude","longitude","aqi","pm2_5"])
-    # Fill AQI/category from pm2_5 if AQI is missing
-    if "pm2_5" in fdf.columns:
-        fdf["aqi"] = fdf.get("aqi")
-        fdf["aqi_category"] = fdf.get("aqi_category")
-        miss = fdf["aqi"].isna() if "aqi" in fdf else fdf["pm2_5"].notna()
-        if miss.any():
-            _aqi_vals = []
-            _aqi_cat = []
-            for v in fdf["pm2_5"]:
-                a, c = _aqi_from_pm25(v)
-                _aqi_vals.append(a)
-                _aqi_cat.append(c)
-            if "aqi" not in fdf: fdf["aqi"] = None
-            if "aqi_category" not in fdf: fdf["aqi_category"] = None
-            fdf.loc[miss, "aqi"] = [x for i, x in enumerate(_aqi_vals) if miss.iloc[i]]
-            fdf.loc[miss, "aqi_category"] = [x for i, x in enumerate(_aqi_cat) if miss.iloc[i]]
-    # Final clean: drop mostly-empty columns again & strip all-None columns
-    fdf = drop_mostly_empty_columns(fdf, thresh=0.98)
-    fdf = drop_empty_columns(fdf)
+    # (AQI-from-PM now handled in _sanitize_overview_df)
 
     c1, c2, c3, c4 = st.columns(4)
     display_aqi = np.nan
@@ -175,6 +204,7 @@ with tabs[0]:
 
     fdf = drop_empty_columns(fdf)
     fdf = drop_empty_columns(fdf)
+    fdf = _sanitize_overview_df(fdf, slug)
     fdf = _sanitize_overview_df(fdf, slug)
     st.dataframe(fdf.tail(300), use_container_width=True)
 
@@ -460,15 +490,6 @@ with tabs[7]:
                 f"• Details: {exc}"
             )
 
-def _sanitize_overview_df(df, slug):
-    """Finalize Overview table:
-    - replace 'None' with NaN
-    - backfill pm2_5 from forecast (if missing)
-    - derive AQI + category from pm2_5 when missing
-    - drop mostly-empty columns (keep key cols)
-    """
-    if df is None or df.empty:
-        return df
     # Backfill from forecast
     try:
         fpath_back = resolve_forecast_path(slug)
@@ -499,17 +520,6 @@ def _sanitize_overview_df(df, slug):
     df = drop_mostly_empty_columns(df, thresh=0.98, keep=keep)
     df = drop_empty_columns(df)  # remove any that are still all-NaN
     return df
-
-def _sanitize_overview_df(df, slug):
-    """Finalize Overview table:
-    - replace 'None' with NaN
-    - backfill pm2_5 from forecast (if missing)
-    - derive AQI + category from pm2_5 when missing
-    - drop mostly-empty columns (keep key cols)
-    """
-    import numpy as np
-    if df is None or df.empty:
-        return df
 
     # Backfill pm2_5 from forecast
     try:
