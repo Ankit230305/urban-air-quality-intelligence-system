@@ -9,6 +9,7 @@ import streamlit as st
 import plotly.express as px
 
 from src.utils.live_fetch import fetch_live_point, livepoint_to_df
+from src.utils.clean import coerce_none_like, fill_missing_for_display
 
 st.set_page_config(page_title="Urban AQI", page_icon="🌆", layout="wide")
 st.title("Urban Air Quality Intelligence System")
@@ -106,6 +107,7 @@ with tabs[0]:
     if fdf is None or fdf.empty:
         st.warning("No processed file found. Showing sample data for demo.")
         fdf = synthetic_processed(city)
+    fdf = coerce_none_like(fdf)
     fdf = ensure_numeric(
         fdf,
         ["pm2_5", "pm10", "no2", "o3", "so2", "co",
@@ -113,8 +115,12 @@ with tabs[0]:
     )
 
     c1, c2, c3, c4 = st.columns(4)
-    aqi_now = fdf["pm2_5"].tail(24).mean() if "pm2_5" in fdf else np.nan
-    c1.metric("Current AQI proxy (24h mean PM2.5)", f"{aqi_now:.1f}")
+    display_aqi = np.nan
+    if "aqi" in fdf and fdf["aqi"].notna().any():
+        display_aqi = float(fdf["aqi"].dropna().tail(1).mean())
+    elif "pm2_5" in fdf and fdf["pm2_5"].notna().any():
+        display_aqi = float(fdf["pm2_5"].tail(24).mean())  # proxy only for display
+    c1.metric("Current AQI (or PM2.5 proxy)", "—" if np.isnan(display_aqi) else f"{display_aqi:.1f}")
     c2.metric("Rows", f"{len(fdf):,}")
     if "datetime" in fdf.columns:
         c3.metric("Last timestamp", str(pd.to_datetime(fdf["datetime"]).max()))
@@ -134,6 +140,7 @@ with tabs[1]:
         df = synthetic_processed(city)
         used_synth = True
 
+    df = coerce_none_like(df)
     df = ensure_numeric(
         df,
         ["pm2_5", "pm10", "no2", "o3", "so2", "co",
@@ -278,6 +285,28 @@ with tabs[5]:
         st.info("No health file yet.")
 
 
+
+# ---------------------------- Models ----------------------------
+with tabs[6]:
+    st.subheader("Model Scores")
+    # expects models/supervised_metrics_<city>.json
+    mfile = MODELS / f"supervised_metrics_{slug}.json"
+    if mfile.exists():
+        import json
+        metrics = json.loads(mfile.read_text())
+        if isinstance(metrics, dict):
+            # show as 2-column table: model | metrics json
+            rows = []
+            for model_name, m in metrics.items():
+                rows.append({"model": model_name, **({k: v for k, v in m.items() if isinstance(v, (int,float,str))})})
+            if rows:
+                st.dataframe(pd.DataFrame(rows), use_container_width=True)
+            else:
+                st.json(metrics)
+        else:
+            st.json(metrics)
+    else:
+        st.info("No supervised metrics file found yet. Train models to populate this tab.")
 # ---------------------------- Live Now ----------------------------
 with tabs[6]:
     st.subheader("Live Now")

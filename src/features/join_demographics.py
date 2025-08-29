@@ -1,53 +1,38 @@
-import argparse
+from __future__ import annotations
+from pathlib import Path
 import pandas as pd
 
+DEMOS = Path("data/external/city_demographics.csv")
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument(
-        "--features", required=True, help="processed features CSV with a 'datetime' column"
-    )
-    ap.add_argument("--demographics", default="data/external/demographics_india.csv")
-    ap.add_argument("--city", required=True, help="City name to match")
-    ap.add_argument("--output", required=True)
-    args = ap.parse_args()
+def _slug(s: str) -> str:
+    return (s or "").strip().lower().replace(" ", "_")
 
-    f = pd.read_csv(args.features, parse_dates=["datetime"])
-    d = pd.read_csv(args.demographics)
+def run(input_file: str, city: str, output_file: str) -> None:
+    """Join demographics by city slug; fill safe defaults if file/rows missing."""
+    df = pd.read_csv(input_file)
+    slug = _slug(city)
+    # load demos
+    if DEMOS.exists():
+        dem = pd.read_csv(DEMOS)
+        # allow both 'city' and 'slug' columns
+        if "slug" not in dem.columns:
+            dem["slug"] = dem.get("city", "").astype(str).str.lower().str.replace(" ", "_", regex=False)
+        dem = dem.drop_duplicates("slug")
+        demo_row = dem[dem["slug"] == slug]
+        if demo_row.empty:
+            demo_row = pd.DataFrame([{
+                "slug": slug, "_category": "unknown", "population": 0,
+                "pop_density_per_km2": 0.0, "pct_elderly": 0.0, "pct_children": 0.0,
+                "respiratory_illness_rate_per_100k": 0.0
+            }])
+    else:
+        demo_row = pd.DataFrame([{
+            "slug": slug, "_category": "unknown", "population": 0,
+            "pop_density_per_km2": 0.0, "pct_elderly": 0.0, "pct_children": 0.0,
+            "respiratory_illness_rate_per_100k": 0.0
+        }])
 
-    # match by 'city' first, fallback to district contains
-    row = None
-    if "city" in d.columns:
-        m = d["city"].str.strip().str.lower() == args.city.strip().lower()
-        if m.any():
-            row = d[m].iloc[0]
-    if row is None and "district" in d.columns:
-        # crude fallback (works when city == district name)
-        m = d["district"].str.strip().str.lower().str.contains(args.city.strip().lower())
-        if m.any():
-            row = d[m].iloc[0]
-
-    if row is None:
-        print(
-            f"[WARN] No demographics match for city='{args.city}' in {args.demographics}. Copying features unchanged."
-        )
-        f.to_csv(args.output, index=False)
-        return
-
-    # broadcast demographics across all rows
-    for c in [
-        "population",
-        "pop_density_per_km2",
-        "pct_elderly",
-        "pct_children",
-        "respiratory_illness_rate_per_100k",
-    ]:
-        if c in d.columns:
-            f[c] = row.get(c)
-
-    f.to_csv(args.output, index=False)
-    print(f"✅ wrote {args.output} with demographics columns")
-
-
-if __name__ == "__main__":
-    main()
+    df["slug"] = slug
+    out = pd.merge(df, demo_row, on="slug", how="left", suffixes=("", ""))
+    out.to_csv(output_file, index=False)
+    print(f"✅ demographics joined → {output_file} (rows={len(out)})")
