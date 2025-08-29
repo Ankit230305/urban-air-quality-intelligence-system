@@ -21,8 +21,8 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.metrics import classification_report, mean_absolute_error
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, classification_report
 from sklearn.preprocessing import LabelEncoder
 
 

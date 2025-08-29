@@ -1,11 +1,15 @@
 from __future__ import annotations
+
 from pathlib import Path
+
 import pandas as pd
 
 DEMOS = Path("data/external/city_demographics.csv")
 
+
 def _slug(s: str) -> str:
     return (s or "").strip().lower().replace(" ", "_")
+
 
 def run(input_file: str, city: str, output_file: str) -> None:
     """Join demographics by city slug; fill safe defaults if file/rows missing."""

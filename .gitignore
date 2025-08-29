@@ -75,3 +75,9 @@ dist/
 
 build/
 dist/
+
+# editor backups
+*.bak
+
+# editor backups
+*.bak

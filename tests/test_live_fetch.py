@@ -1,5 +1,5 @@
-from types import SimpleNamespace
-import pandas as pd
+
+
 import pytest
 
 

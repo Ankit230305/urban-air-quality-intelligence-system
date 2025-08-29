@@ -1,10 +1,12 @@
 from __future__ import annotations
-import os
+
 import math
-from typing import Optional, Dict, Any, List
-import requests
+import os
+from typing import Any, Dict, List, Optional
+
 import pandas as pd
-from dotenv import load_dotenv, find_dotenv
+import requests
+from dotenv import find_dotenv, load_dotenv
 
 # Load .env from project root
 load_dotenv(find_dotenv(usecwd=True), override=True)

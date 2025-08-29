@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import numpy as np
 import pandas as pd
 
@@ -14,6 +15,7 @@ CAT_SAFE_DEFAULTS = {
     "aqi_category": "Unknown",
     "_category": "unknown",
 }
+
 
 def coerce_none_like(df: pd.DataFrame) -> pd.DataFrame:
     """Turn string 'None', '', 'nan' to np.nan, and cast numerics."""
@@ -31,6 +33,7 @@ def coerce_none_like(df: pd.DataFrame) -> pd.DataFrame:
         out["datetime"] = pd.to_datetime(out["datetime"], errors="coerce")
     return out
 
+
 def fill_missing_for_display(df: pd.DataFrame) -> pd.DataFrame:
     """Fill NAs with safe values that won't break charts/tables."""
     if df is None or df.empty:
@@ -45,6 +48,7 @@ def fill_missing_for_display(df: pd.DataFrame) -> pd.DataFrame:
         if col in out.columns:
             out[col] = out[col].fillna(default)
     return out
+
 
 def drop_empty_columns(df: pd.DataFrame, keep: list[str] | None = None) -> pd.DataFrame:
     # Drop columns that are entirely NaN or the literal strings 'None' or ''.
@@ -63,6 +67,7 @@ def drop_empty_columns(df: pd.DataFrame, keep: list[str] | None = None) -> pd.Da
             out = pd.concat([out, tmp[keep]], axis=1)
     return out
 
+
 def has_enough_points(df: pd.DataFrame, cols: list[str], min_points: int = 10) -> bool:
     # True if df has at least `min_points` non-null rows across provided columns.
     if df is None or df.empty:
@@ -71,6 +76,7 @@ def has_enough_points(df: pd.DataFrame, cols: list[str], min_points: int = 10) -
     if not subset:
         return False
     return df[subset].dropna().shape[0] >= min_points
+
 
 def drop_mostly_empty_columns(df: pd.DataFrame, thresh: float = 0.95, keep: list[str] | None = None) -> pd.DataFrame:
     """Drop columns where fraction of NaN/empty >= thresh. Keep any in `keep`."""
@@ -86,6 +92,7 @@ def drop_mostly_empty_columns(df: pd.DataFrame, thresh: float = 0.95, keep: list
     cols = [c for c in tmp.columns if (frac_nan[c] < thresh) or (c in keep)]
     return tmp[cols]
 
+
 def recent_nonnull_window(df: pd.DataFrame, ycol: str, xcol: str = "datetime", days: int = 14) -> pd.DataFrame:
     """Return the last `days` of rows where ycol has data; falls back to all."""
     if df is None or df.empty or ycol not in df or xcol not in df:
@@ -95,6 +102,7 @@ def recent_nonnull_window(df: pd.DataFrame, ycol: str, xcol: str = "datetime", d
         return df
     cutoff = pd.to_datetime(dff[xcol]).max() - pd.Timedelta(days=days)
     return df[pd.to_datetime(df[xcol]) >= cutoff].copy()
+
 
 def backfill_pm_from_forecast(proc_df: pd.DataFrame, fcst_df: pd.DataFrame, pm_col: str = "pm2_5") -> pd.DataFrame:
     """If `pm_col` has many NaNs, fill missing using forecast `yhat` on nearest hour."""

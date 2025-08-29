@@ -5,7 +5,7 @@ from src.utils.config import get_config
 # If your project exposes these, keep the imports below.
 # Otherwise, comment them out or adjust to your module names.
 try:
-    from src.utils.aqi import compute_aqi_pm25, aqi_category  # type: ignore
+    from src.utils.aqi import aqi_category, compute_aqi_pm25  # type: ignore
 except Exception:  # pragma: no cover
     compute_aqi_pm25 = None  # fallback for CI if module missing
     aqi_category = None

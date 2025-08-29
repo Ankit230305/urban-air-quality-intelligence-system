@@ -1,5 +1,6 @@
 import argparse
 from pathlib import Path
+
 import pandas as pd
 
 POLLUTANTS = ["pm2_5", "pm10", "no2", "o3", "so2", "co"]

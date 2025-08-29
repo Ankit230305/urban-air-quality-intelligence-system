@@ -24,11 +24,11 @@ from typing import Optional, Tuple
 import pandas as pd
 
 from src.utils.api_clients import (
-    fetch_openweathermap_air_pollution,
     fetch_openaq_v3_measurements,
+    fetch_openweathermap_air_pollution,
     fetch_purpleair_sensors,
-    fetch_waqi_current,
     fetch_visualcrossing_weather,
+    fetch_waqi_current,
 )
 
 

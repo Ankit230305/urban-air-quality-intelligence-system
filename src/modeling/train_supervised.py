@@ -1,36 +1,38 @@
 import argparse
 import json
 from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
-def _save_metrics(metrics: dict, city: str) -> None:
+metrics: dict, city: str) -> None:
     """Persist supervised model metrics next to models/"""
-    from pathlib import Path
     import json
+    from pathlib import Path
     slug = (city or "").lower().replace(" ", "_")
     out = Path("models") / (f"supervised_metrics_{slug}.json" if slug else "supervised_metrics.json")
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w") as f:
         json.dump(metrics, f, indent=2)
 
+import warnings
+
+import joblib
 from sklearn.ensemble import (
-    RandomForestRegressor,
     GradientBoostingRegressor,
-    RandomForestClassifier,
     HistGradientBoostingRegressor,
+    RandomForestClassifier,
+    RandomForestRegressor,
 )
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
+    accuracy_score,
+    confusion_matrix,
+    f1_score,
     mean_absolute_error,
     mean_squared_error,
     r2_score,
-    accuracy_score,
-    f1_score,
-    confusion_matrix,
 )
-import joblib
-import warnings
 
 warnings.filterwarnings("ignore", category=UserWarning)
 warnings.filterwarnings("ignore", category=RuntimeWarning)
