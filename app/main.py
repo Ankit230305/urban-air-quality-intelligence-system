@@ -368,6 +368,161 @@ def snapshot_live(city: str, lat: float, lon: float, df: pd.DataFrame, raw: Dict
     except Exception as e:
         st.toast(f"Snapshot save failed: {e}", icon="⚠️")
 
+
+
+def derive_aqi_category_from_numeric(aqi_value: Optional[float]) -> str:
+    return aqi_category(safe_float(aqi_value, None))
+
+def derive_category_from_df(df: pd.DataFrame) -> pd.Series:
+    for c in ["aqi_category","aqi_cat","category"]:
+        if c in df.columns:
+            return df[c].fillna("Unknown").astype(str)
+    if "aqi" in df.columns:
+        return df["aqi"].apply(derive_aqi_category_from_numeric)
+    if "pm2_5" in df.columns:
+        return df["pm2_5"].apply(lambda v: aqi_category(aqi_from_pm25(safe_float(v, None))))
+    return pd.Series(["Unknown"] * len(df), index=df.index, name="aqi_category")
+
+def compute_models_scores(df: pd.DataFrame) -> Dict[str, Any]:
+    results = {
+        "regression": {"model":"LinearRegression (baseline)","features_used":[], "n_train":0,"n_test":0,"r2":"N/A","mae":"N/A","rmse":"N/A","baseline_mae":"N/A"},
+        "classification": {"model":"LogisticRegression (baseline)","features_used":[], "n_train":0,"n_test":0,"accuracy":"N/A","macro_f1":"N/A","baseline_acc":"N/A","labels":[], "cm": None},
+    }
+    feat_candidates = ["pm10","no2","o3","so2","co","temp","humidity","wind_speed","precip"]
+    feats = [c for c in feat_candidates if c in df.columns]
+    if not feats:
+        exclude = {"pm2_5","aqi"}
+        feats = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c]) and c not in exclude]
+
+    if "pm2_5" in df.columns and feats:
+        dfr = df[feats+["pm2_5"]].copy().dropna(subset=["pm2_5"])
+        for c in feats:
+            if pd.api.types.is_numeric_dtype(dfr[c]):
+                dfr[c] = dfr[c].fillna(0)
+            else:
+                dfr[c] = pd.to_numeric(dfr[c], errors="coerce").fillna(0)
+        if len(dfr) >= 30:
+            try:
+                from sklearn.model_selection import train_test_split
+                from sklearn.metrics import r2_score, mean_absolute_error
+                from sklearn.linear_model import LinearRegression
+                from math import sqrt
+                import numpy as np
+                X = dfr[feats].values
+                y = dfr["pm2_5"].values.astype(float)
+                X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+                model = LinearRegression().fit(X_train, y_train)
+                y_pred = model.predict(X_test)
+                r2 = float(r2_score(y_test, y_pred))
+                mae = float(mean_absolute_error(y_test, y_pred))
+                rmse = float(sqrt(((y_test - y_pred)**2).mean()))
+                baseline_mae = float(mean_absolute_error(y_test, np.full_like(y_test, y_train.mean())))
+                results["regression"].update({"features_used":feats,"n_train":int(len(y_train)),"n_test":int(len(y_test)),"r2":round(r2,3),"mae":round(mae,3),"rmse":round(rmse,3),"baseline_mae":round(baseline_mae,3)})
+                results["regression"]["y_test_pred"] = (y_test, y_pred)
+            except Exception:
+                pass
+
+    y_cat = derive_category_from_df(df).astype(str)
+    if feats and len(df) >= 30:
+        dfc = df[feats].copy()
+        for c in feats:
+            if pd.api.types.is_numeric_dtype(dfc[c]):
+                dfc[c] = dfc[c].fillna(0)
+            else:
+                dfc[c] = pd.to_numeric(dfc[c], errors="coerce").fillna(0)
+        try:
+            from sklearn.model_selection import train_test_split
+            from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
+            from sklearn.linear_model import LogisticRegression
+            import numpy as np
+            labels, y = np.unique(y_cat.values, return_inverse=True)
+            X = dfc.values
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y if len(labels)>1 else None)
+            if len(np.unique(y_train))>1 and len(y_test)>0:
+                clf = LogisticRegression(max_iter=1000).fit(X_train, y_train)
+                y_pred = clf.predict(X_test)
+                acc = float(accuracy_score(y_test, y_pred))
+                m_f1 = float(f1_score(y_test, y_pred, average="macro"))
+                base_acc = float((y_test == np.bincount(y_train).argmax()).mean())
+                cm = confusion_matrix(y_test, y_pred)
+                results["classification"].update({"features_used":feats,"n_train":int(len(y_train)),"n_test":int(len(y_test)),"accuracy":round(acc,3),"macro_f1":round(m_f1,3),"baseline_acc":round(base_acc,3),"labels":labels.tolist(),"cm":cm.tolist()})
+        except Exception:
+            import numpy as np
+            labels, y = np.unique(y_cat.values, return_inverse=True)
+            if len(y)>0:
+                maj = np.bincount(y).argmax()
+                base_acc = float((y == maj).mean())
+                results["classification"].update({"features_used":feats,"n_train":int(len(y)),"n_test":0,"accuracy":"N/A","macro_f1":"N/A","baseline_acc":round(base_acc,3),"labels":labels.tolist(),"cm":None})
+    return results
+
+def render_models_scores(city: str):
+    st.markdown(f"**City:** {city}")
+    paths = [MODELS_DIR / "pm25_regressor.joblib", MODELS_DIR / "aqi_classifier.joblib", MODELS_DIR / "forecast_pm25.csv", MODELS_DIR / "metrics.json"]
+    st.markdown("**Artifacts present**")
+    for pth in paths:
+        st.write(f"- {pth.name}: {'✅' if pth.exists() else '❌'}")
+    metrics_path = MODELS_DIR / "metrics.json"
+    if metrics_path.exists():
+        try:
+            metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+            st.markdown("### Saved Metrics")
+            dfm = pd.DataFrame(metrics if isinstance(metrics, list) else [metrics])
+            display_df(dfm, note="Loaded from models/metrics.json")
+            return
+        except Exception:
+            st.warning("metrics.json found but could not be parsed; computing quick metrics in app.")
+    df = load_city_processed(city)
+    if df.empty:
+        st.info("No processed data for this city; run your pipeline to compute model metrics.", icon="ℹ️")
+        return
+    st.markdown("### Quick Baselines (computed now)")
+    results = compute_models_scores(df)
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Regression – predict PM2.5**")
+        st.write(f"Model: {results['regression']['model']}")
+        st.write(f"Features: {', '.join(results['regression']['features_used']) or 'N/A'}")
+        st.write(f"Train/Test: {results['regression']['n_train']}/{results['regression']['n_test']}")
+        st.write(f"R²: {results['regression']['r2']}")
+        st.write(f"MAE: {results['regression']['mae']} | RMSE: {results['regression']['rmse']}")
+        st.write(f"Baseline MAE: {results['regression']['baseline_mae']}")
+    with c2:
+        st.markdown("**Classification – AQI Category**")
+        st.write(f"Model: {results['classification']['model']}")
+        st.write(f"Features: {', '.join(results['classification']['features_used']) or 'N/A'}")
+        st.write(f"Train/Test: {results['classification']['n_train']}/{results['classification']['n_test']}")
+        st.write(f"Accuracy: {results['classification']['accuracy']} | Macro-F1: {results['classification']['macro_f1']}")
+        st.write(f"Baseline Acc: {results['classification']['baseline_acc']}")
+    st.markdown("---")
+    ytp = results["regression"].get("y_test_pred")
+    if ytp:
+        y_test, y_pred = ytp
+        dfp = pd.DataFrame({"y_test": y_test, "y_pred": y_pred})
+        fig = px.scatter(dfp, x="y_test", y="y_pred", trendline="ols", title="Regression: Predicted vs Actual (PM2.5)")
+        plotly_safe(fig)
+    cm = results["classification"].get("cm")
+    labels = results["classification"].get("labels", [])
+    if cm and labels:
+        fig = px.imshow(np.array(cm), x=labels, y=labels, text_auto=True, title="Classification: Confusion Matrix")
+        plotly_safe(fig)
+    summary = {
+        "Task": ["Regression (PM2.5)", "Classification (AQI Category)"],
+        "Model": [results["regression"]["model"], results["classification"]["model"]],
+        "Features": [
+            ", ".join(results["regression"]["features_used"]) or "N/A",
+            ", ".join(results["classification"]["features_used"]) or "N/A",
+        ],
+        "Train": [results["regression"]["n_train"], results["classification"]["n_train"]],
+        "Test": [results["regression"]["n_test"], results["classification"]["n_test"]],
+        "Score 1": [f"R²={results['regression']['r2']}", f"Acc={results['classification']['accuracy']}"],
+        "Score 2": [f"MAE={results['regression']['mae']}", f"Macro-F1={results['classification']['macro_f1']}"],
+        "Baseline": [f"MAE={results['regression']['baseline_mae']}", f"Acc={results['classification']['baseline_acc']}"],
+    }
+    st.markdown("### Summary")
+    display_df(pd.DataFrame(summary), note="Computed live (quick baselines) if saved metrics not found.")
+
+
+
 # =============== App ===============
 st.set_page_config(page_title="Urban Air Quality Intelligence", layout="wide")
 
@@ -587,18 +742,8 @@ elif page == "Forecast":
 
 elif page == "Models & Scores":
     st.subheader("Models & Scores")
-    paths = [
-        MODELS_DIR / "pm25_regressor.joblib",
-        MODELS_DIR / "aqi_classifier.joblib",
-        MODELS_DIR / "forecast_pm25.csv",
-    ]
-    for p in paths:
-        st.write(f"- {p} {'✅' if p.exists() else '❌'}")
-    if (MODELS_DIR / "forecast_pm25.csv").exists():
-        fc = load_forecast()
-        if not fc.empty:
-            fig = px.line(fc, x="ds", y=[c for c in fc.columns if c != "ds" and pd.api.types.is_numeric_dtype(fc[c])], title="Forecast overview")
-            plotly_safe(fig)
+    city, _, _ = city_selector('models') if 'city_selector' in globals() else (st.selectbox('City', list(CITIES.keys()), index=1, key='models_city'), None, None)
+    render_models_scores(city)
 
 elif page == "Anomalies & Health":
     st.subheader("Anomalies & Health")
