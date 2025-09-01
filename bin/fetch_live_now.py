@@ -1,45 +1,41 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
-import pandas as pd
+import sys
+from datetime import datetime, timezone, timezone
 
-from src.utils.live_fetch import fetch_live_point, livepoint_to_df
+# Make 'src' imports work when called from anywhere
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+
+from src.utils.live_fetch import fetch_live_bundle, slugify  # noqa: E402
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Fetch a live snapshot now.")
-    ap.add_argument("--city", required=True)
-    ap.add_argument("--lat", type=float, required=True)
-    ap.add_argument("--lon", type=float, required=True)
-    ap.add_argument(
-        "--out",
-        default=None,
-        help="Optional CSV to append to (default: data/processed/<city>__live.csv)",
-    )
-    args = ap.parse_args()
+    p = argparse.ArgumentParser(description="Fetch live air & weather from providers.")
+    p.add_argument("--city", required=True, help="City name (e.g. Mumbai)")
+    p.add_argument("--lat", required=True, type=float)
+    p.add_argument("--lon", required=True, type=float)
+    p.add_argument("--outdir", default="data/live", help="Output folder (default: data/live)")
+    args = p.parse_args()
 
-    out = (
-        Path(args.out)
-        if args.out
-        else Path("data/processed") / f"{args.city.lower().replace(' ', '_')}__live.csv"
-    )
-    out.parent.mkdir(parents=True, exist_ok=True)
+    df, raw = fetch_live_bundle(args.city, args.lat, args.lon)
 
-    try:
-        lp = fetch_live_point(args.city, args.lat, args.lon)
-        df = livepoint_to_df(lp)
-    except RuntimeError as exc:
-        print(f"[ERROR] {exc}")
-        return
+    outdir = Path(args.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
 
-    if out.exists():
-        df0 = pd.read_csv(out)
-        df = pd.concat([df0, df], ignore_index=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    slug = slugify(args.city)
+    csv_path = outdir / f"{slug}_live_{ts}.csv"
+    json_path = outdir / f"{slug}_live_{ts}.json"
 
-    df.to_csv(out, index=False)
-    print(f"✅ Live snapshot saved to {out} (rows={len(df)})")
+    df.to_csv(csv_path, index=False)
+    json_path.write_text(json.dumps(raw, indent=2))
+
+    print(f"✅ wrote {csv_path}  ({len(df)} rows)")
+    print(f"✅ wrote {json_path}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,319 @@
+"""City-aware Streamlit dashboard for the Urban Air Quality Intelligence System (UAQIS)."""
+import os, sys, subprocess, pathlib
+from pathlib import Path
+import pandas as pd
+import numpy as np
+import streamlit as st
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+# ---- Presets (major Indian cities) ----
+CITY_PRESETS = {
+    "Delhi":      {"lat": 28.6139, "lon": 77.2090},
+    "Hyderabad":  {"lat": 17.3850, "lon": 78.4867},
+    "Chennai":    {"lat": 13.0827, "lon": 80.2707},
+    "Mumbai":     {"lat": 19.0760, "lon": 72.8777},
+    "Kolkata":    {"lat": 22.5726, "lon": 88.3639},
+    "Bengaluru":  {"lat": 12.9716, "lon": 77.5946},
+    "Vizag":      {"lat": 17.6868, "lon": 83.2185},
+    "Vellore":    {"lat": 12.9165, "lon": 79.1325},
+}
+
+st.set_page_config(page_title="Urban Air Quality Intelligence System", layout="wide", initial_sidebar_state="expanded")
+st.title("Urban Air Quality Intelligence System")
+
+# ---------------- Session State ----------------
+def _init_state():
+    if "preset_city" not in st.session_state:
+        st.session_state.preset_city = "Vellore"
+    if "city" not in st.session_state:
+        st.session_state.city = st.session_state.preset_city
+    if "lat" not in st.session_state or "lon" not in st.session_state:
+        c = CITY_PRESETS.get(st.session_state.preset_city, {})
+        st.session_state.lat = float(c.get("lat", 0.0))
+        st.session_state.lon = float(c.get("lon", 0.0))
+    if "start_date" not in st.session_state:
+        st.session_state.start_date = "2024/08/17"
+    if "end_date" not in st.session_state:
+        st.session_state.end_date = "2024/08/24"
+    if "processed_path" not in st.session_state:
+        st.session_state.processed_path = ""
+
+_init_state()
+
+def slug_of(city: str) -> str:
+    return city.lower().replace(" ", "_")
+
+def on_change_preset():
+    st.session_state.city = st.session_state.preset_city
+    c = CITY_PRESETS.get(st.session_state.preset_city, {})
+    st.session_state.lat = float(c.get("lat", 0.0))
+    st.session_state.lon = float(c.get("lon", 0.0))
+    st.session_state.processed_path = ""   # force re-pick for new city
+
+# ---------------- Sidebar ----------------
+st.sidebar.header("Configuration")
+
+st.sidebar.selectbox(
+    "Preset city",
+    list(CITY_PRESETS.keys()),
+    key="preset_city",
+    on_change=on_change_preset,
+)
+
+st.sidebar.text_input("City name", key="city")
+st.sidebar.number_input("Latitude", key="lat", format="%.6f")
+st.sidebar.number_input("Longitude", key="lon", format="%.6f")
+
+st.sidebar.text_input("Start date (YYYY/MM/DD)", key="start_date")
+st.sidebar.text_input("End date (YYYY/MM/DD)",   key="end_date")
+
+source_choice = st.sidebar.selectbox("Data source", ["Auto (build if needed)", "Load from processed CSV"], index=0)
+
+# Utility: find newest processed file for a city
+def find_processed_for_city(city_slug: str) -> Path:
+    proc_dir = Path("data/processed")
+    if not proc_dir.exists():
+        return Path("data/processed/merged_dataset.csv")
+    pats = (
+        f"*{city_slug}*features_plus_demo*.csv",
+        f"*{city_slug}*features*.csv",
+        f"*{city_slug}*processed*.csv",
+        f"*{city_slug}*.csv",
+        "*features_plus_demo*.csv", "*features*.csv", "*processed*.csv", "*.csv",
+    )
+    candidates = []
+    for pat in pats:
+        candidates += list(proc_dir.glob(pat))
+    candidates = [c for c in candidates if c.is_file()]
+    candidates.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+    return candidates[0] if candidates else Path("data/processed/merged_dataset.csv")
+
+city_slug = slug_of(st.session_state.city)
+if not st.session_state.processed_path:
+    st.session_state.processed_path = str(find_processed_for_city(city_slug))
+
+st.sidebar.text_input("Processed CSV path", key="processed_path")
+
+colA, colB = st.sidebar.columns(2)
+build_btn = colA.button("Build/Refresh data")
+load_btn  = colB.button("Load data")
+
+# ---------------- Helpers ----------------
+def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Rename common synonyms to our expected names."""
+    ren = {
+        "pm25": "pm2_5",
+        "PM2.5": "pm2_5",
+        "PM10": "pm10",
+        "temperature": "temp",
+        "temp_c": "temp",
+        "windspeed": "wind_speed",
+        "windSpeed": "wind_speed",
+        "precipitation": "precip",
+        "lat": "latitude",
+        "lon": "longitude",
+    }
+    for k, v in ren.items():
+        if k in df.columns and v not in df.columns:
+            df = df.rename(columns={k: v})
+    return df
+
+def read_csv_safe(path: str) -> pd.DataFrame:
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"File not found: {p}")
+    try:
+        df = pd.read_csv(p, parse_dates=["datetime"])
+    except Exception:
+        df = pd.read_csv(p)
+        if "datetime" in df.columns:
+            df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce")
+    return normalize_columns(df)
+
+def filter_by_dates(df: pd.DataFrame, start_s: str, end_s: str) -> pd.DataFrame:
+    if "datetime" not in df.columns:
+        return df
+    dt = pd.to_datetime(df["datetime"], errors="coerce")
+    try:
+        dt = dt.dt.tz_convert(None)
+    except Exception:
+        try:
+            dt = dt.dt.tz_localize(None)
+        except Exception:
+            pass
+    df = df.copy()
+    df["datetime"] = dt
+    start = pd.to_datetime(start_s, errors="coerce")
+    end   = pd.to_datetime(end_s,   errors="coerce")
+    try: start = start.tz_localize(None)
+    except: pass
+    try: end   = end.tz_localize(None)
+    except: pass
+    if pd.isna(start) or pd.isna(end):
+        return df
+    if end < start:
+        start, end = end, start
+    m = (df["datetime"] >= start) & (df["datetime"] <= end)
+    out = df.loc[m]
+    if out.empty:
+        st.warning("No rows in this date range; showing full range.")
+        return df
+    return out
+
+def show_map(df: pd.DataFrame, lat: float, lon: float):
+    if {"latitude","longitude"}.issubset(df.columns):
+        pts = df[["latitude","longitude"]].dropna().drop_duplicates()
+        if pts.empty:
+            pts = pd.DataFrame({"latitude":[lat], "longitude":[lon]})
+    else:
+        pts = pd.DataFrame({"latitude":[lat], "longitude":[lon]})
+    try:
+        import folium
+        from streamlit_folium import st_folium
+        m = folium.Map(location=[pts["latitude"].iloc[0], pts["longitude"].iloc[0]], zoom_start=11)
+        for _, r in pts.iterrows():
+            folium.CircleMarker([r["latitude"], r["longitude"]], radius=4, color="#3186cc").add_to(m)
+        st_folium(m, height=350, width=None)
+    except Exception:
+        st.map(pts.rename(columns={"latitude":"lat","longitude":"lon"}))
+
+def pollutant_metrics(df: pd.DataFrame):
+    cols = [("PM2.5 (µg/m³)","pm2_5"), ("PM10 (µg/m³)","pm10"), ("NO₂ (µg/m³)","no2"),
+            ("O₃ (µg/m³)","o3"), ("SO₂ (µg/m³)","so2"), ("CO (µg/m³)","co")]
+    row = df.sort_values("datetime").tail(1) if not df.empty else pd.DataFrame()
+    c1,c2,c3,c4,c5,c6 = st.columns(6)
+    cells = [c1,c2,c3,c4,c5,c6]
+    for cell, (label, col) in zip(cells, cols):
+        val = row[col].iloc[0] if (not row.empty and col in row.columns) else np.nan
+        cell.metric(label, f"{val:.2f}" if pd.notna(val) else "—")
+
+def line_section(df: pd.DataFrame, cols: list, title: str):
+    avail = [c for c in cols if c in df.columns]
+    if not avail:
+        st.info(f"No columns available for {title}: expected {cols}")
+        return
+    st.subheader(title)
+    st.line_chart(df.set_index("datetime")[avail])
+
+def scatter_pm25(df: pd.DataFrame, cols: list):
+    import plotly.express as px
+    if "pm2_5" not in df.columns:
+        st.info("PM2.5 column not present for scatter plots.")
+        return
+    for c in cols:
+        if c in df.columns:
+            st.markdown(f"**PM2.5 vs {c}**")
+            fig = px.scatter(df, x=c, y="pm2_5", opacity=0.6, trendline="ols",
+                             labels={"pm2_5":"PM2.5 (µg/m³)", c:c})
+            st.plotly_chart(fig, use_container_width=True)
+
+def corr_heatmap(df: pd.DataFrame):
+    import plotly.express as px
+    num = df.select_dtypes(include=[np.number])
+    if num.empty:
+        st.info("No numeric columns for correlation heatmap.")
+        return
+    corr = num.corr(numeric_only=True)
+    fig = px.imshow(corr, text_auto=False, aspect="auto", title="Correlation heatmap")
+    st.plotly_chart(fig, use_container_width=True)
+
+# ---------------- Main ----------------
+df = pd.DataFrame()
+
+# Build/refresh artifact generation
+if build_btn:
+    with st.status(f"Building data for {st.session_state.city}…", expanded=True) as ststat:
+        cmd = [
+            "bash", "bin/run_city_pipeline.sh",
+            st.session_state.city,
+            str(st.session_state.lat), str(st.session_state.lon),
+            st.session_state.start_date.replace("/", "-"),
+            st.session_state.end_date.replace("/", "-"),
+        ]
+        st.write("Running:", " ".join(cmd))
+        try:
+            subprocess.check_call(cmd)
+            st.session_state.processed_path = str(find_processed_for_city(slug_of(st.session_state.city)))
+            ststat.update(label=f"Build complete for {st.session_state.city}.", state="complete")
+        except subprocess.CalledProcessError as e:
+            ststat.update(label="Build failed.", state="error")
+            st.error(f"Pipeline failed: {e}")
+
+# Decide which file to load
+if source_choice.startswith("Auto"):
+    st.session_state.processed_path = str(find_processed_for_city(slug_of(st.session_state.city)))
+
+if load_btn or source_choice.startswith("Auto"):
+    try:
+        df = read_csv_safe(st.session_state.processed_path)
+    except FileNotFoundError as e:
+        st.error(str(e))
+    except Exception as e:
+        st.error(f"Failed to load processed file: {e}")
+
+st.caption(f"Using file: {st.session_state.processed_path}")
+if not df.empty:
+    df = df.sort_values("datetime")
+    df = filter_by_dates(df, st.session_state.start_date, st.session_state.end_date)
+    mn = pd.to_datetime(df["datetime"], errors="coerce").min()
+    mx = pd.to_datetime(df["datetime"], errors="coerce").max()
+    st.caption(f"Loaded rows: {len(df)} | Date range in view: {mn} → {mx}")
+
+# Top metrics (pollutants)
+pollutant_metrics(df)
+
+# Map
+st.subheader("Location")
+show_map(df, st.session_state.lat, st.session_state.lon)
+
+# Tabs
+tab_eda, tab_forecast, tab_anom, tab_health = st.tabs(["EDA", "Forecast", "Anomalies", "Health"])
+
+with tab_eda:
+    st.markdown("### Time Series — Pollutants")
+    line_section(df, ["pm2_5","pm10","no2","o3","so2","co"], "Pollutants")
+
+    st.markdown("### Time Series — Weather")
+    line_section(df, ["temp","humidity","wind_speed","precip"], "Weather")
+
+    st.markdown("### Weather ↔ PM2.5")
+    scatter_pm25(df, ["temp","humidity","wind_speed","precip"])
+
+    st.markdown("### Correlations")
+    corr_heatmap(df)
+
+with tab_forecast:
+    city_slug = slug_of(st.session_state.city)
+    fpath = Path(f"models/forecast_pm25_{city_slug}.csv")
+    if not fpath.exists():
+        fpath = Path("models/forecast_pm25.csv")
+    if fpath.exists():
+        f = pd.read_csv(fpath, parse_dates=["ds"])
+        st.markdown("### 7-day PM2.5 Forecast (Prophet)")
+        st.line_chart(f.set_index("ds")[["yhat","yhat_lower","yhat_upper"]])
+        st.dataframe(f.tail(20))
+    else:
+        st.info("No forecast found. Click **Build/Refresh data**.")
+
+with tab_anom:
+    city_slug = slug_of(st.session_state.city)
+    apath = Path(f"data/processed/{city_slug}_anomalies.csv")
+    if apath.exists():
+        a = pd.read_csv(apath, parse_dates=["datetime"])
+        st.markdown("### Detected Pollution Spikes")
+        st.dataframe(a.tail(50))
+    else:
+        st.info("No anomaly file found. Click **Build/Refresh data**.")
+
+with tab_health:
+    city_slug = slug_of(st.session_state.city)
+    hpath = Path(f"data/processed/{city_slug}_health.csv")
+    if hpath.exists():
+        h = pd.read_csv(hpath, parse_dates=["datetime"])
+        st.markdown("### Health Risk Estimates & Advisories")
+        st.dataframe(h.tail(50))
+    else:
+        st.info("No health file found. Click **Build/Refresh data**.")
