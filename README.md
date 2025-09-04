@@ -73,11 +73,6 @@ Tests respect .env overrides for reproducibility.
 ⸻
 
 🚀 Quick Start
-source ~/venvs/uaqi/bin/activate
-cd ~/Projects/urban-air-quality-intelligence-system
-
-set -a; source .env; set +a
-PYTHONPATH=. streamlit run app/main.py
 # 1) create venv & install
 python -m venv .venv
 source .venv/bin/activate
@@ -144,3 +139,13 @@ flake8 src tests
 	•	(Optional) Visual Crossing Weather
 	•	(Optional) PurpleAir, OpenAQ, CPCB
 	•	City demographics (CSV in data/external/)
+
+
+
+source ~/venvs/uaqi/bin/activate
+cd ~/Projects/urban-air-quality-intelligence-system
+
+set -a; source .env; set +a
+PYTHONPATH=. streamlit run app/main.py
+
+git add -A && git commit -am "update" && git push
